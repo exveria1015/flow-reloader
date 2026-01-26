@@ -118,6 +118,16 @@ impl<T: CartridgeState> DerefMut for State<T> {
     }
 }
 
+impl<T: CartridgeState> CartridgeState for State<T> {
+    fn snapshot(&self, out: &mut Vec<u8>) {
+        self.inner.snapshot(out);
+    }
+
+    fn restore(&mut self, input: &[u8]) -> Result<(), String> {
+        self.inner.restore(input)
+    }
+}
+
 pub trait CartridgeState: Default {
     fn snapshot(&self, out: &mut Vec<u8>);
     fn restore(&mut self, input: &[u8]) -> Result<(), String>;
