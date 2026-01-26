@@ -1,0 +1,20 @@
+[package]
+name = "flow_reload"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+interface = { path = "../interface" }
+hot_macro = { path = "../hot_macro" }
+libloading = "0.8"
+notify = "6"
+tokio = { version = "1", optional = true, features = ["rt", "time", "net", "io-util"] }
+async-std = { version = "1", optional = true }
+smol = { version = "1", optional = true }
+
+[features]
+default = []
+tokio = ["dep:tokio"]
+async-std = ["dep:async-std"]
+smol = ["dep:smol"]
+cartridge-serde = ["interface/cartridge-serde"]

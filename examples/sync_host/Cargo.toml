@@ -1,0 +1,8 @@
+[package]
+name = "sync_host"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+flow_reload = { path = "../../flow_reload" }
+sync_logic = { path = "../sync_logic" }

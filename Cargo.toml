@@ -1,0 +1,19 @@
+[workspace]
+members = [
+    "interface",
+    "hot_macro",
+    "flow_reload",
+    "examples/sync_logic",
+    "examples/sync_host",
+    "examples/async_tokio_logic",
+    "examples/async_tokio_host",
+    "examples/async_std_logic",
+    "examples/async_std_host",
+    "examples/async_smol_logic",
+    "examples/async_smol_host",
+    "examples/snapshot_logic",
+    "examples/snapshot_host",
+    "examples/tauri_tokio_logic",
+    "examples/tauri_tokio/src-tauri",
+]
+resolver = "2"

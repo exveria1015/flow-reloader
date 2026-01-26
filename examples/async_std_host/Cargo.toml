@@ -1,0 +1,9 @@
+[package]
+name = "async_std_host"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+flow_reload = { path = "../../flow_reload", features = ["async-std"] }
+async_std_logic = { path = "../async_std_logic" }
+async-std = "1"

@@ -1,0 +1,15 @@
+[package]
+name = "interface"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["rlib"]
+
+[dependencies]
+serde = { version = "1", optional = true, features = ["derive"] }
+bincode = { version = "1", optional = true }
+
+[features]
+default = []
+cartridge-serde = ["dep:serde", "dep:bincode"]

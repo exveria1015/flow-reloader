@@ -1,0 +1,68 @@
+:root {
+  color-scheme: light;
+  font-family: "IBM Plex Sans", "Space Grotesk", system-ui, sans-serif;
+  background: #f6f2ed;
+  color: #1f1a17;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background: radial-gradient(circle at top, #fdf7f1, #efe7df 55%, #e5dbd1 100%);
+}
+
+.app {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 48px 24px 32px;
+  display: flex;
+  flex-direction: column;
+  gap: 32px;
+}
+
+header h1 {
+  margin: 0 0 8px;
+  font-size: 40px;
+  letter-spacing: -0.02em;
+}
+
+.tagline {
+  margin: 0;
+  font-size: 16px;
+  color: #6a5f57;
+}
+
+.panel {
+  padding: 24px;
+  border-radius: 20px;
+  background: #ffffffcc;
+  box-shadow: 0 20px 40px rgba(62, 44, 30, 0.12);
+  display: grid;
+  gap: 16px;
+}
+
+.row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 18px;
+}
+
+.label {
+  font-weight: 600;
+}
+
+.value {
+  font-family: "JetBrains Mono", "Fira Code", monospace;
+}
+
+footer {
+  font-size: 13px;
+  color: #8a8078;
+}
+
+code {
+  background: #efe7df;
+  padding: 2px 6px;
+  border-radius: 6px;
+}

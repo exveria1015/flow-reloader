@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Reactor Reloader | Tauri Tokio</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main class="app">
+      <header>
+        <h1>Reactor Reloader</h1>
+        <p class="tagline">Tauri v2 + Tokio attached hot-reload</p>
+      </header>
+
+      <section class="panel">
+        <div class="row">
+          <span class="label">Status</span>
+          <span id="status" class="value">Booting…</span>
+        </div>
+        <div class="row">
+          <span class="label">Counter</span>
+          <span id="counter" class="value">-</span>
+        </div>
+        <div class="row">
+          <span class="label">Message</span>
+          <span id="message" class="value">Waiting for events…</span>
+        </div>
+      </section>
+
+      <footer>
+        <span>Event: <code>hot_state</code></span>
+      </footer>
+    </main>
+
+    <script src="main.js"></script>
+  </body>
+</html>

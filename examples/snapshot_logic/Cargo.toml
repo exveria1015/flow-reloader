@@ -1,0 +1,11 @@
+[package]
+name = "snapshot_logic"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+flow_reload = { path = "../../flow_reload", features = ["cartridge-serde"] }
+serde = { version = "1", features = ["derive"] }

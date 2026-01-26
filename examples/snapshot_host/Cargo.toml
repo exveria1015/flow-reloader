@@ -1,0 +1,9 @@
+[package]
+name = "snapshot_host"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+flow_reload = { path = "../../flow_reload" }
+snapshot_logic = { path = "../snapshot_logic" }
+bincode = "1"

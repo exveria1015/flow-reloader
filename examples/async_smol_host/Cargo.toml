@@ -1,0 +1,9 @@
+[package]
+name = "async_smol_host"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+flow_reload = { path = "../../flow_reload", features = ["smol"] }
+async_smol_logic = { path = "../async_smol_logic" }
+smol = "1"
