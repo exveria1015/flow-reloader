@@ -104,21 +104,20 @@ pub fn hot_swap(_attr: TokenStream, item: TokenStream) -> TokenStream {
                 data: *mut ::std::ffi::c_void,
                 host_waker: *const ::flow_reload::HostWaker,
             ) -> ::flow_reload::RunStatus {
+                if data.is_null() || host_waker.is_null() {
+                    return ::flow_reload::RunStatus::Error;
+                }
+                ::flow_reload::set_attached_host_waker(host_waker);
                 let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    if data.is_null() || host_waker.is_null() {
-                        return ::flow_reload::RunStatus::Error;
-                    }
-                    ::flow_reload::set_attached_host_waker(host_waker);
                     let fut = &mut *(data as *mut AttachedDirectFuture);
                     let waker = waker_from_host(&*host_waker);
                     let mut cx = ::std::task::Context::from_waker(&waker);
-                    let status = match fut.future.as_mut().poll(&mut cx) {
+                    match fut.future.as_mut().poll(&mut cx) {
                         ::std::task::Poll::Pending => ::flow_reload::RunStatus::Pending,
                         ::std::task::Poll::Ready(_) => ::flow_reload::RunStatus::Done,
-                    };
-                    ::flow_reload::clear_attached_host_waker();
-                    status
+                    }
                 }));
+                ::flow_reload::clear_attached_host_waker();
                 match result {
                     Ok(status) => status,
                     Err(_) => ::flow_reload::RunStatus::Error,
@@ -165,12 +164,15 @@ pub fn hot_swap(_attr: TokenStream, item: TokenStream) -> TokenStream {
             ) -> ::flow_reload::RunStatus {
                 use std::future::Future;
 
+                if state_ptr.is_null() {
+                    return ::flow_reload::RunStatus::Error;
+                }
                 let state = &mut *state_ptr;
                 FUTURE_SLOT.with(|slot| {
                     let mut slot_ref = slot.borrow_mut();
 
                     if slot_ref.is_none() {
-                        let fut = #inner_name(unsafe { std::mem::transmute(state) });
+                        let fut = #inner_name(state);
                         *slot_ref = Some(Box::pin(fut));
                     }
 
@@ -233,7 +235,7 @@ pub fn hot_swap(_attr: TokenStream, item: TokenStream) -> TokenStream {
                     };
                 }
                 let state = &mut *state_ptr;
-                let fut = #inner_name(unsafe { std::mem::transmute(state) });
+                let fut = #inner_name(state);
                 let task = Box::new(AttachedDirectFuture {
                     future: Box::pin(fut),
                 });
@@ -284,6 +286,9 @@ pub fn hot_swap(_attr: TokenStream, item: TokenStream) -> TokenStream {
             pub unsafe extern "C" fn hot_entry(
                 state_ptr: *mut ::flow_reload::AppState,
             ) -> ::flow_reload::RunStatus {
+                if state_ptr.is_null() {
+                    return ::flow_reload::RunStatus::Error;
+                }
                 let state = &mut *state_ptr;
                 let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     #inner_name(state);
@@ -399,6 +404,9 @@ pub fn hot_reload(_attr: TokenStream, item: TokenStream) -> TokenStream {
                 use std::future::Future;
                 use ::flow_reload::CartridgeState;
 
+                if state_ptr.is_null() {
+                    return ::flow_reload::RunStatus::Error;
+                }
                 let state = &mut *state_ptr;
                 SLOT.with(|slot| {
                     let mut slot_ref = slot.borrow_mut();
@@ -445,9 +453,13 @@ pub fn hot_reload(_attr: TokenStream, item: TokenStream) -> TokenStream {
                         match poll {
                             std::task::Poll::Ready(_) => {
                                 let mut buf = Vec::new();
-                                {
+                                let snapshot_result = {
                                     let slot_mut = slot_ref.as_mut().unwrap();
-                                    slot_mut.state.snapshot(&mut buf);
+                                    slot_mut.state.snapshot(&mut buf)
+                                };
+                                if snapshot_result.is_err() {
+                                    *slot_ref = None;
+                                    return ::flow_reload::RunStatus::Error;
                                 }
                                 if !state.write_cartridge(&buf) {
                                     *slot_ref = None;
@@ -499,6 +511,9 @@ pub fn hot_reload(_attr: TokenStream, item: TokenStream) -> TokenStream {
             ) -> ::flow_reload::RunStatus {
                 use ::flow_reload::CartridgeState;
 
+                if state_ptr.is_null() {
+                    return ::flow_reload::RunStatus::Error;
+                }
                 let state = &mut *state_ptr;
                 let mut cartridge_state: #state_ty = Default::default();
                 let bytes = state.cartridge_bytes();
@@ -513,7 +528,9 @@ pub fn hot_reload(_attr: TokenStream, item: TokenStream) -> TokenStream {
                 match result {
                     Ok(()) => {
                         let mut buf = Vec::new();
-                        cartridge_state.snapshot(&mut buf);
+                        if cartridge_state.snapshot(&mut buf).is_err() {
+                            return ::flow_reload::RunStatus::Error;
+                        }
                         if !state.write_cartridge(&buf) {
                             return ::flow_reload::RunStatus::Error;
                         }

@@ -17,6 +17,15 @@ use smol::net::TcpStream as SmolTcpStream;
 
 static ATTACHED_RUNTIME: AtomicPtr<HostRuntimeVTable> = AtomicPtr::new(std::ptr::null_mut());
 
+fn drop_attached_future(future: AttachedFuture) {
+    if future.vtable.is_null() || future.data.is_null() {
+        return;
+    }
+    unsafe {
+        ((*future.vtable).drop)(future.data);
+    }
+}
+
 pub struct AttachedRuntimeGuard {
     #[cfg(feature = "tokio")]
     #[allow(dead_code)]
@@ -415,15 +424,34 @@ impl Future for AttachedTcpRequest<'_> {
             RunStatus::Pending => Poll::Pending,
             RunStatus::Done => {
                 if self.out.len() < 4 {
+                    if let Some(inner) = self.inner.take() {
+                        drop_attached_future(inner);
+                    }
                     return Poll::Ready(Ok(0));
                 }
                 let mut len_bytes = [0u8; 4];
                 len_bytes.copy_from_slice(&self.out[..4]);
                 let len = u32::from_le_bytes(len_bytes) as usize;
                 let max_len = self.out.len().saturating_sub(4);
+                if let Some(inner) = self.inner.take() {
+                    drop_attached_future(inner);
+                }
                 Poll::Ready(Ok(len.min(max_len)))
             }
-            RunStatus::Error => Poll::Ready(Err(RunStatus::Error)),
+            RunStatus::Error => {
+                if let Some(inner) = self.inner.take() {
+                    drop_attached_future(inner);
+                }
+                Poll::Ready(Err(RunStatus::Error))
+            }
+        }
+    }
+}
+
+impl Drop for AttachedTcpRequest<'_> {
+    fn drop(&mut self) {
+        if let Some(inner) = self.inner.take() {
+            drop_attached_future(inner);
         }
     }
 }
@@ -794,7 +822,20 @@ impl Future for AttachedSleep {
         let status = unsafe { ((*fut.vtable).poll)(fut.data, host_waker as *const _) };
         match status {
             RunStatus::Pending => Poll::Pending,
-            _ => Poll::Ready(()),
+            _ => {
+                if let Some(inner) = self.inner.take() {
+                    drop_attached_future(inner);
+                }
+                Poll::Ready(())
+            }
+        }
+    }
+}
+
+impl Drop for AttachedSleep {
+    fn drop(&mut self) {
+        if let Some(inner) = self.inner.take() {
+            drop_attached_future(inner);
         }
     }
 }
@@ -966,7 +1007,7 @@ impl Future for AttachedFutureTask {
 
 impl Drop for AttachedFutureTask {
     fn drop(&mut self) {
-        if self.future.vtable.is_null() {
+        if self.future.vtable.is_null() || self.future.data.is_null() {
             return;
         }
         let vtable = unsafe { &*self.future.vtable };

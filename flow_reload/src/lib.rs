@@ -64,6 +64,35 @@ pub mod internal {
         manifest_dir.join("target").join("hot-reload-build")
     }
 
+    pub fn resolve_logic_manifest_dir(host_manifest_dir: &PathBuf, package_name: &str) -> PathBuf {
+        if let Ok(path) = std::env::var("FLOW_RELOAD_LOGIC_MANIFEST_DIR") {
+            let candidate = PathBuf::from(path);
+            if candidate
+                .file_name()
+                .map(|name| name == "Cargo.toml")
+                .unwrap_or(false)
+            {
+                if let Some(parent) = candidate.parent() {
+                    return parent.to_path_buf();
+                }
+            }
+            if candidate.join("Cargo.toml").exists() {
+                return candidate;
+            }
+            eprintln!(
+                "FLOW_RELOAD_LOGIC_MANIFEST_DIR does not point to a crate directory: {}",
+                candidate.display()
+            );
+        }
+
+        let sibling = host_manifest_dir.join("..").join(package_name);
+        if sibling.join("Cargo.toml").exists() {
+            return sibling;
+        }
+
+        host_manifest_dir.join(package_name)
+    }
+
     pub fn build_logic(
         package_name: &str,
         manifest_dir: &PathBuf,
@@ -87,6 +116,8 @@ pub mod internal {
 
     pub fn start_source_watcher(manifest_dir: &PathBuf) -> Option<SourceWatcher> {
         let src_dir = manifest_dir.join("src");
+        let cargo_manifest = manifest_dir.join("Cargo.toml");
+        let build_script = manifest_dir.join("build.rs");
         let (tx, rx) = mpsc::channel();
         let mut watcher = match notify::recommended_watcher(
             move |event: Result<notify::Event, notify::Error>| {
@@ -108,8 +139,40 @@ pub mod internal {
             }
         };
 
-        if let Err(err) = watcher.watch(&src_dir, RecursiveMode::Recursive) {
-            eprintln!("Failed to watch {}: {err}", src_dir.display());
+        let mut watched_any = false;
+
+        if cargo_manifest.exists() {
+            match watcher.watch(&cargo_manifest, RecursiveMode::NonRecursive) {
+                Ok(()) => watched_any = true,
+                Err(err) => {
+                    eprintln!("Failed to watch {}: {err}", cargo_manifest.display());
+                }
+            }
+        }
+
+        if build_script.exists() {
+            match watcher.watch(&build_script, RecursiveMode::NonRecursive) {
+                Ok(()) => watched_any = true,
+                Err(err) => {
+                    eprintln!("Failed to watch {}: {err}", build_script.display());
+                }
+            }
+        }
+
+        if src_dir.exists() {
+            match watcher.watch(&src_dir, RecursiveMode::Recursive) {
+                Ok(()) => watched_any = true,
+                Err(err) => {
+                    eprintln!("Failed to watch {}: {err}", src_dir.display());
+                }
+            }
+        }
+
+        if !watched_any {
+            eprintln!(
+                "Failed to start source watcher: no watchable paths in {}",
+                manifest_dir.display()
+            );
             return None;
         }
 
@@ -208,9 +271,11 @@ macro_rules! __main_impl {
 
             #[cfg(debug_assertions)]
             {
-                let logic_manifest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                    .join("..")
-                    .join(stringify!($logic));
+                let host_manifest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+                let logic_manifest_dir = $crate::internal::resolve_logic_manifest_dir(
+                    &host_manifest_dir,
+                    stringify!($logic),
+                );
                 let target_dir = $crate::internal::default_target_dir(&logic_manifest_dir);
                 let mut source_watcher = $crate::internal::start_source_watcher(&logic_manifest_dir);
                 let mut runner: Option<$crate::FlowRunner> = None;
@@ -245,7 +310,15 @@ macro_rules! __main_impl {
                                     $crate::internal::library_path_in(&target_dir, stringify!($logic));
                                 match runner.as_mut() {
                                     Some(active) => {
-                                        let _ = active.reload_if_needed();
+                                        match active.reload_if_needed() {
+                                            Ok(true) => println!("Reloaded logic."),
+                                            Ok(false) => {}
+                                            Err(err) => {
+                                                eprintln!("FlowRunner reload error: {err}");
+                                                runtime.sleep(std::time::Duration::from_secs(1));
+                                                continue;
+                                            }
+                                        }
                                     }
                                     None => match $crate::FlowRunner::new(&logic_path) {
                                         Ok(new_runner) => {
@@ -289,6 +362,7 @@ macro_rules! __main_impl {
                                 err,
                                 $crate::RunnerError::AbiVersion { .. }
                                     | $crate::RunnerError::StateSize { .. }
+                                    | $crate::RunnerError::AllocatorTag { .. }
                             );
                             if requires_restart {
                                 eprintln!(
@@ -302,8 +376,14 @@ macro_rules! __main_impl {
                         }
                     }
 
-                    if let Ok(true) = active.reload_if_needed() {
-                        println!("Reloaded logic.");
+                    match active.reload_if_needed() {
+                        Ok(true) => println!("Reloaded logic."),
+                        Ok(false) => {}
+                        Err(err) => {
+                            eprintln!("FlowRunner reload error: {err}");
+                            runtime.sleep(std::time::Duration::from_secs(1));
+                            continue;
+                        }
                     }
                     runtime.sleep(std::time::Duration::from_millis(16));
                 }
@@ -335,9 +415,11 @@ macro_rules! __main_impl {
 
             #[cfg(debug_assertions)]
             {
-                let logic_manifest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                    .join("..")
-                    .join(stringify!($logic));
+                let host_manifest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+                let logic_manifest_dir = $crate::internal::resolve_logic_manifest_dir(
+                    &host_manifest_dir,
+                    stringify!($logic),
+                );
                 let target_dir = $crate::internal::default_target_dir(&logic_manifest_dir);
                 let mut source_watcher = $crate::internal::start_source_watcher(&logic_manifest_dir);
                 let mut runner: Option<$crate::FlowRunner> = None;
@@ -372,7 +454,15 @@ macro_rules! __main_impl {
                                     $crate::internal::library_path_in(&target_dir, stringify!($logic));
                                 match runner.as_mut() {
                                     Some(active) => {
-                                        let _ = active.reload_if_needed();
+                                        match active.reload_if_needed() {
+                                            Ok(true) => println!("Reloaded logic."),
+                                            Ok(false) => {}
+                                            Err(err) => {
+                                                eprintln!("FlowRunner reload error: {err}");
+                                                runtime.sleep(std::time::Duration::from_secs(1));
+                                                continue;
+                                            }
+                                        }
                                     }
                                     None => match $crate::FlowRunner::with_runtime(
                                         &logic_path,
@@ -419,6 +509,7 @@ macro_rules! __main_impl {
                                 err,
                                 $crate::RunnerError::AbiVersion { .. }
                                     | $crate::RunnerError::StateSize { .. }
+                                    | $crate::RunnerError::AllocatorTag { .. }
                             );
                             if requires_restart {
                                 eprintln!(
@@ -432,8 +523,14 @@ macro_rules! __main_impl {
                         }
                     }
 
-                    if let Ok(true) = active.reload_if_needed() {
-                        println!("Reloaded logic.");
+                    match active.reload_if_needed() {
+                        Ok(true) => println!("Reloaded logic."),
+                        Ok(false) => {}
+                        Err(err) => {
+                            eprintln!("FlowRunner reload error: {err}");
+                            runtime.sleep(std::time::Duration::from_secs(1));
+                            continue;
+                        }
                     }
                     runtime.sleep(std::time::Duration::from_millis(16));
                 }
@@ -468,9 +565,11 @@ macro_rules! __main_impl {
 
             #[cfg(debug_assertions)]
             {
-                let logic_manifest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                    .join("..")
-                    .join(stringify!($logic));
+                let host_manifest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+                let logic_manifest_dir = $crate::internal::resolve_logic_manifest_dir(
+                    &host_manifest_dir,
+                    stringify!($logic),
+                );
                 let target_dir = $crate::internal::default_target_dir(&logic_manifest_dir);
                 let mut source_watcher = $crate::internal::start_source_watcher(&logic_manifest_dir);
                 let mut runner: Option<$crate::FlowRunner> = None;
@@ -505,7 +604,15 @@ macro_rules! __main_impl {
                                     $crate::internal::library_path_in(&target_dir, stringify!($logic));
                                 match runner.as_mut() {
                                     Some(active) => {
-                                        let _ = active.reload_if_needed();
+                                        match active.reload_if_needed() {
+                                            Ok(true) => println!("Reloaded logic."),
+                                            Ok(false) => {}
+                                            Err(err) => {
+                                                eprintln!("FlowRunner reload error: {err}");
+                                                runtime.sleep(std::time::Duration::from_secs(1));
+                                                continue;
+                                            }
+                                        }
                                     }
                                     None => match $crate::FlowRunner::with_context_and_runtime(
                                         &logic_path,
@@ -553,6 +660,7 @@ macro_rules! __main_impl {
                                 err,
                                 $crate::RunnerError::AbiVersion { .. }
                                     | $crate::RunnerError::StateSize { .. }
+                                    | $crate::RunnerError::AllocatorTag { .. }
                             );
                             if requires_restart {
                                 eprintln!(
@@ -566,8 +674,14 @@ macro_rules! __main_impl {
                         }
                     }
 
-                    if let Ok(true) = active.reload_if_needed() {
-                        println!("Reloaded logic.");
+                    match active.reload_if_needed() {
+                        Ok(true) => println!("Reloaded logic."),
+                        Ok(false) => {}
+                        Err(err) => {
+                            eprintln!("FlowRunner reload error: {err}");
+                            runtime.sleep(std::time::Duration::from_secs(1));
+                            continue;
+                        }
                     }
                     runtime.sleep(std::time::Duration::from_millis(16));
                 }
@@ -577,8 +691,165 @@ macro_rules! __main_impl {
             {
                 let ctx_ptr = (&mut context as *mut _) as *mut std::ffi::c_void;
                 let status = unsafe { $logic::hot_init(ctx_ptr) };
-                if status == $crate::RunStatus::Error {
-                    eprintln!("hot_init failed in release mode.");
+                if status != $crate::RunStatus::Done {
+                    eprintln!("hot_init failed in release mode: {status:?}");
+                    return;
+                }
+                loop {
+                    let status = unsafe { $logic::hot_entry(&mut state) };
+                    match status {
+                        $crate::RunStatus::Pending => {
+                            runtime.sleep(std::time::Duration::from_millis(16));
+                        }
+                        $crate::RunStatus::Error => {
+                            eprintln!("Logic returned error status.");
+                        }
+                        $crate::RunStatus::Done => {}
+                    }
+                    ($tick)(&state);
+                }
+            }
+        }
+    };
+    (@with_context_rt $logic:ident, $state:ty, $context:expr, $runtime:expr, $init:block, $tick:expr) => {
+        fn main() {
+            let mut state: $state = Default::default();
+            let mut context = $context;
+            let runtime: $crate::RuntimeHandle = $runtime.into();
+            #[cfg(debug_assertions)]
+            $crate::internal::assert_context_type(&mut context);
+            $init
+
+            #[cfg(debug_assertions)]
+            {
+                let host_manifest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+                let logic_manifest_dir = $crate::internal::resolve_logic_manifest_dir(
+                    &host_manifest_dir,
+                    stringify!($logic),
+                );
+                let target_dir = $crate::internal::default_target_dir(&logic_manifest_dir);
+                let mut source_watcher = $crate::internal::start_source_watcher(&logic_manifest_dir);
+                let mut runner: Option<$crate::FlowRunner> = None;
+                let mut built_once = false;
+                let mut last_change: Option<std::time::Instant> = None;
+                let debounce = std::time::Duration::from_millis(300);
+
+                loop {
+                    let mut build_now = false;
+                    if !built_once {
+                        build_now = true;
+                    } else if $crate::internal::source_changed(&mut source_watcher) {
+                        last_change = Some(std::time::Instant::now());
+                    }
+
+                    if let Some(instant) = last_change {
+                        if instant.elapsed() >= debounce {
+                            build_now = true;
+                            last_change = None;
+                        }
+                    }
+
+                    if build_now {
+                        match $crate::internal::build_logic(
+                            stringify!($logic),
+                            &logic_manifest_dir,
+                            &target_dir,
+                        ) {
+                            Ok(status) if status.success() => {
+                                built_once = true;
+                                let logic_path =
+                                    $crate::internal::library_path_in(&target_dir, stringify!($logic));
+                                match runner.as_mut() {
+                                    Some(active) => {
+                                        match active.reload_if_needed() {
+                                            Ok(true) => println!("Reloaded logic."),
+                                            Ok(false) => {}
+                                            Err(err) => {
+                                                eprintln!("FlowRunner reload error: {err}");
+                                                runtime.sleep(std::time::Duration::from_secs(1));
+                                                continue;
+                                            }
+                                        }
+                                    }
+                                    None => match $crate::FlowRunner::with_context_and_runtime(
+                                        &logic_path,
+                                        &mut context,
+                                        runtime.clone(),
+                                    ) {
+                                        Ok(new_runner) => {
+                                            runner = Some(new_runner);
+                                        }
+                                        Err(err) => {
+                                            eprintln!("Failed to start FlowRunner: {err}");
+                                            runtime.sleep(std::time::Duration::from_secs(1));
+                                            continue;
+                                        }
+                                    },
+                                }
+                            }
+                            Ok(_) => {
+                                eprintln!("\x1b[31mBuild failed; waiting for changes...\x1b[0m");
+                                runtime.sleep(std::time::Duration::from_secs(1));
+                                continue;
+                            }
+                            Err(err) => {
+                                eprintln!("\x1b[31mBuild error: {err}\x1b[0m");
+                                runtime.sleep(std::time::Duration::from_secs(1));
+                                continue;
+                            }
+                        }
+                    }
+
+                    let Some(active) = runner.as_mut() else {
+                        runtime.sleep(std::time::Duration::from_millis(16));
+                        continue;
+                    };
+
+                    match active.run(&mut state) {
+                        Ok(status) => {
+                            if status == $crate::RunStatus::Error {
+                                eprintln!("Logic returned error status.");
+                            }
+                            ($tick)(&state);
+                        }
+                        Err(err) => {
+                            let requires_restart = matches!(
+                                err,
+                                $crate::RunnerError::AbiVersion { .. }
+                                    | $crate::RunnerError::StateSize { .. }
+                                    | $crate::RunnerError::AllocatorTag { .. }
+                            );
+                            if requires_restart {
+                                eprintln!(
+                                    "\x1b[31mABI/state mismatch detected. Please rebuild and restart the host.\x1b[0m"
+                                );
+                                return;
+                            }
+                            eprintln!("FlowRunner error: {err}");
+                            runtime.sleep(std::time::Duration::from_secs(1));
+                            continue;
+                        }
+                    }
+
+                    match active.reload_if_needed() {
+                        Ok(true) => println!("Reloaded logic."),
+                        Ok(false) => {}
+                        Err(err) => {
+                            eprintln!("FlowRunner reload error: {err}");
+                            runtime.sleep(std::time::Duration::from_secs(1));
+                            continue;
+                        }
+                    }
+                    runtime.sleep(std::time::Duration::from_millis(16));
+                }
+            }
+
+            #[cfg(not(debug_assertions))]
+            {
+                let ctx_ptr = (&mut context as *mut _) as *mut std::ffi::c_void;
+                let status = unsafe { $logic::hot_init(ctx_ptr) };
+                if status != $crate::RunStatus::Done {
+                    eprintln!("hot_init failed in release mode: {status:?}");
                     return;
                 }
                 loop {

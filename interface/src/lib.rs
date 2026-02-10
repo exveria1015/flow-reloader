@@ -66,7 +66,7 @@ impl AppState {
 
     pub fn save_cartridge<T: CartridgeState>(&mut self, value: &T) -> Result<(), String> {
         let mut buf = Vec::new();
-        value.snapshot(&mut buf);
+        value.snapshot(&mut buf)?;
         if !self.write_cartridge(&buf) {
             return Err("cartridge capacity exceeded".to_string());
         }
@@ -119,8 +119,8 @@ impl<T: CartridgeState> DerefMut for State<T> {
 }
 
 impl<T: CartridgeState> CartridgeState for State<T> {
-    fn snapshot(&self, out: &mut Vec<u8>) {
-        self.inner.snapshot(out);
+    fn snapshot(&self, out: &mut Vec<u8>) -> Result<(), String> {
+        self.inner.snapshot(out)
     }
 
     fn restore(&mut self, input: &[u8]) -> Result<(), String> {
@@ -129,7 +129,7 @@ impl<T: CartridgeState> CartridgeState for State<T> {
 }
 
 pub trait CartridgeState: Default {
-    fn snapshot(&self, out: &mut Vec<u8>);
+    fn snapshot(&self, out: &mut Vec<u8>) -> Result<(), String>;
     fn restore(&mut self, input: &[u8]) -> Result<(), String>;
 }
 
@@ -138,10 +138,10 @@ impl<T> CartridgeState for T
 where
     T: Default + serde::Serialize + serde::de::DeserializeOwned,
 {
-    fn snapshot(&self, out: &mut Vec<u8>) {
-        if let Ok(bytes) = bincode::serialize(self) {
-            out.extend_from_slice(&bytes);
-        }
+    fn snapshot(&self, out: &mut Vec<u8>) -> Result<(), String> {
+        let bytes = bincode::serialize(self).map_err(|err| err.to_string())?;
+        out.extend_from_slice(&bytes);
+        Ok(())
     }
 
     fn restore(&mut self, input: &[u8]) -> Result<(), String> {

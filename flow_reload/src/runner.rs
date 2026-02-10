@@ -19,7 +19,7 @@ use std::fmt;
 use std::ffi::c_void;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver};
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 pub struct FlowRunner {
     load_id: u64,
@@ -273,55 +273,31 @@ impl FlowRunner {
             return Ok(false);
         }
 
-        let current = self
-            .loaded
-            .take()
-            .expect("FlowRunner loaded library missing");
+        let source_path = self.loaded_ref().source_path.clone();
+        let next_load_id = self.load_id.saturating_add(1);
+        let loaded = load_library(&source_path, next_load_id, self.init_context)?;
+        let current = self.loaded.replace(loaded).expect("FlowRunner loaded library missing");
+
         #[cfg(any(feature = "tokio", feature = "async-std", feature = "smol"))]
         if let Some(reset) = current.reset_attached {
             unsafe { reset() };
         }
-        self.load_id += 1;
-        let loaded = reload_library(current, self.load_id, self.init_context)?;
-        self.loaded = Some(loaded);
+
+        let old_copy = current.copy_path.clone();
+        drop(current);
+        let _ = std::fs::remove_file(old_copy);
+        self.load_id = next_load_id;
         Ok(true)
     }
 
     fn metadata_checked(&mut self) -> Result<Metadata, RunnerError> {
         loop {
             let metadata = unsafe { (self.loaded_ref().get_type)() };
-            if metadata.abi_version != ABI_VERSION {
+            if let Err(err) = validate_metadata(metadata) {
                 if self.reload_if_needed()? {
                     continue;
                 }
-                return Err(RunnerError::AbiVersion {
-                    expected: ABI_VERSION,
-                    found: metadata.abi_version,
-                });
-            }
-
-            let expected_state_size = std::mem::size_of::<AppState>() as u32;
-            if metadata.state_size != expected_state_size {
-                if self.reload_if_needed()? {
-                    continue;
-                }
-                return Err(RunnerError::StateSize {
-                    expected: expected_state_size,
-                    found: metadata.state_size,
-                });
-            }
-
-            #[cfg(target_os = "windows")]
-            {
-                if metadata.allocator_tag != ALLOCATOR_TAG_SYSTEM {
-                    if self.reload_if_needed()? {
-                        continue;
-                    }
-                    return Err(RunnerError::AllocatorTag {
-                        expected: ALLOCATOR_TAG_SYSTEM,
-                        found: metadata.allocator_tag,
-                    });
-                }
+                return Err(err);
             }
 
             return Ok(metadata);
@@ -384,6 +360,9 @@ fn load_library(
         .ok()
         .map(|sym| *sym);
 
+    let metadata = unsafe { get_type() };
+    validate_metadata(metadata)?;
+
     if let (Some(ctx), Some(init_fn)) = (init_context, init) {
         let status = unsafe { init_fn(ctx) };
         if status == RunStatus::Error {
@@ -413,18 +392,6 @@ fn load_library(
     })
 }
 
-fn reload_library(
-    current: LoadedLib,
-    load_id: u64,
-    init_context: Option<*mut c_void>,
-) -> Result<LoadedLib, RunnerError> {
-    let source_path = current.source_path.clone();
-    let old_copy = current.copy_path.clone();
-    drop(current);
-    let _ = std::fs::remove_file(old_copy);
-    load_library(&source_path, load_id, init_context)
-}
-
 fn copy_library(source_path: &Path, load_id: u64) -> Result<PathBuf, RunnerError> {
     let copy_dir = PathBuf::from("target").join("hot");
     std::fs::create_dir_all(&copy_dir)?;
@@ -432,10 +399,61 @@ fn copy_library(source_path: &Path, load_id: u64) -> Result<PathBuf, RunnerError
         .extension()
         .and_then(|value| value.to_str())
         .unwrap_or("dll");
-    let file_name = format!("logic_hot_{load_id}.{}", ext);
+    let stem = source_path
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or("logic");
+    let sanitized_stem: String = stem
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '_' || ch == '-' {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
+    let pid = std::process::id();
+    let file_name = format!(
+        "logic_hot_{}_{}_{}_{}.{}",
+        sanitized_stem, pid, load_id, nonce, ext
+    );
     let dest = copy_dir.join(file_name);
     std::fs::copy(source_path, &dest)?;
     Ok(dest)
+}
+
+fn validate_metadata(metadata: Metadata) -> Result<(), RunnerError> {
+    if metadata.abi_version != ABI_VERSION {
+        return Err(RunnerError::AbiVersion {
+            expected: ABI_VERSION,
+            found: metadata.abi_version,
+        });
+    }
+
+    let expected_state_size = std::mem::size_of::<AppState>() as u32;
+    if metadata.state_size != expected_state_size {
+        return Err(RunnerError::StateSize {
+            expected: expected_state_size,
+            found: metadata.state_size,
+        });
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        if metadata.allocator_tag != ALLOCATOR_TAG_SYSTEM {
+            return Err(RunnerError::AllocatorTag {
+                expected: ALLOCATOR_TAG_SYSTEM,
+                found: metadata.allocator_tag,
+            });
+        }
+    }
+
+    Ok(())
 }
 
 fn should_reload(current: &LoadedLib, reload_requested: bool) -> bool {
