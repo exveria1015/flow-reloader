@@ -1,36 +1,15 @@
-use crate::RunStatus;
-use interface::{
-    AttachedFuture, AttachedFutureVTable, HostRuntimeVTable, HostWaker, HostWakerVTable,
-};
-use std::ffi::c_void;
-use std::future::Future;
-use std::pin::Pin;
-use std::cell::Cell;
-use std::sync::atomic::{AtomicPtr, Ordering};
-use std::task::{Context, Poll, Waker};
-#[cfg(feature = "tokio")]
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use super::waker::waker_from_host;
+use crate::{AttachedFuture, AttachedFutureVTable, HostRuntimeVTable, HostWaker, RunStatus};
 #[cfg(feature = "smol")]
 use smol::io::{AsyncReadExt as SmolReadExt, AsyncWriteExt as SmolWriteExt};
 #[cfg(feature = "smol")]
 use smol::net::TcpStream as SmolTcpStream;
-
-static ATTACHED_RUNTIME: AtomicPtr<HostRuntimeVTable> = AtomicPtr::new(std::ptr::null_mut());
-
-fn drop_attached_future(future: AttachedFuture) {
-    if future.vtable.is_null() || future.data.is_null() {
-        return;
-    }
-    unsafe {
-        ((*future.vtable).drop)(future.data);
-    }
-}
-
-pub struct AttachedRuntimeGuard {
-    #[cfg(feature = "tokio")]
-    #[allow(dead_code)]
-    guard: tokio::runtime::EnterGuard<'static>,
-}
+use std::ffi::c_void;
+use std::future::Future;
+use std::pin::Pin;
+use std::task::{Context, Poll};
+#[cfg(feature = "tokio")]
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 #[cfg(feature = "async-std")]
 #[allow(dead_code)]
@@ -80,12 +59,12 @@ pub unsafe extern "C" fn tokio_spawn_tcp_request(
     };
     let handle = &*(ctx as *const tokio::runtime::Handle);
     let _guard = handle.enter();
-    let _ = handle.spawn(async move {
+    drop(handle.spawn(async move {
         if let Ok(mut stream) = tokio::net::TcpStream::connect(addr).await {
             let _ = stream.write_all(&payload).await;
             let _ = stream.shutdown().await;
         }
-    });
+    }));
 }
 
 #[cfg(not(feature = "tokio"))]
@@ -124,11 +103,12 @@ pub unsafe extern "C" fn smol_spawn_tcp_request(
         std::slice::from_raw_parts(payload, payload_len).to_vec()
     };
 
-    let _ = smol::spawn(async move {
+    smol::spawn(async move {
         if let Ok(mut stream) = SmolTcpStream::connect(addr).await {
             let _ = SmolWriteExt::write_all(&mut stream, &payload).await;
         }
-    });
+    })
+    .detach();
 }
 
 #[cfg(not(feature = "smol"))]
@@ -168,11 +148,11 @@ pub unsafe extern "C" fn async_std_spawn_tcp_request(
         std::slice::from_raw_parts(payload, payload_len).to_vec()
     };
 
-    let _ = async_std::task::spawn(async move {
+    drop(async_std::task::spawn(async move {
         if let Ok(mut stream) = async_std::net::TcpStream::connect(addr).await {
             let _ = async_std::io::WriteExt::write_all(&mut stream, &payload).await;
         }
-    });
+    }));
 }
 
 #[cfg(not(feature = "async-std"))]
@@ -189,9 +169,9 @@ pub unsafe extern "C" fn async_std_spawn_tcp_request(
 #[cfg(feature = "async-std")]
 #[allow(dead_code)]
 pub unsafe extern "C" fn async_std_spawn_sleep_ms(_ctx: *mut c_void, ms: u64) {
-    let _ = async_std::task::spawn(async move {
+    drop(async_std::task::spawn(async move {
         async_std::task::sleep(std::time::Duration::from_millis(ms)).await;
-    });
+    }));
 }
 
 #[cfg(not(feature = "async-std"))]
@@ -225,32 +205,15 @@ pub unsafe extern "C" fn smol_sleep_ms(_ctx: *mut c_void, _ms: u64) -> AttachedF
 #[cfg(feature = "smol")]
 #[allow(dead_code)]
 pub unsafe extern "C" fn smol_spawn_sleep_ms(_ctx: *mut c_void, ms: u64) {
-    let _ = smol::spawn(async move {
+    smol::spawn(async move {
         smol::Timer::after(std::time::Duration::from_millis(ms)).await;
-    });
+    })
+    .detach();
 }
 
 #[cfg(not(feature = "smol"))]
 #[allow(dead_code)]
 pub unsafe extern "C" fn smol_spawn_sleep_ms(_ctx: *mut c_void, _ms: u64) {}
-
-pub struct AttachedTcpRequest<'a> {
-    addr: &'a str,
-    payload: &'a [u8],
-    out: &'a mut [u8],
-    inner: Option<AttachedFuture>,
-}
-
-impl<'a> AttachedTcpRequest<'a> {
-    pub fn new(addr: &'a str, payload: &'a [u8], out: &'a mut [u8]) -> Self {
-        Self {
-            addr,
-            payload,
-            out,
-            inner: None,
-        }
-    }
-}
 
 #[cfg(feature = "async-std")]
 #[allow(dead_code)]
@@ -388,74 +351,6 @@ pub unsafe extern "C" fn smol_tcp_request(
     }
 }
 
-impl Future for AttachedTcpRequest<'_> {
-    type Output = Result<usize, RunStatus>;
-
-    fn poll(mut self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let Some(runtime) = attached_runtime() else {
-            return Poll::Ready(Err(RunStatus::Error));
-        };
-        let Some(host_waker) = current_host_waker() else {
-            return Poll::Ready(Err(RunStatus::Error));
-        };
-
-        if self.inner.is_none() {
-            self.out.fill(0);
-            let fut = unsafe {
-                (runtime.tcp_request)(
-                    runtime.ctx,
-                    self.addr.as_ptr(),
-                    self.addr.len(),
-                    self.payload.as_ptr(),
-                    self.payload.len(),
-                    self.out.as_mut_ptr(),
-                    self.out.len(),
-                )
-            };
-            if fut.vtable.is_null() {
-                return Poll::Ready(Err(RunStatus::Error));
-            }
-            self.inner = Some(fut);
-        }
-
-        let fut = self.inner.as_mut().expect("attached tcp future missing");
-        let status = unsafe { ((*fut.vtable).poll)(fut.data, host_waker as *const _) };
-        match status {
-            RunStatus::Pending => Poll::Pending,
-            RunStatus::Done => {
-                if self.out.len() < 4 {
-                    if let Some(inner) = self.inner.take() {
-                        drop_attached_future(inner);
-                    }
-                    return Poll::Ready(Ok(0));
-                }
-                let mut len_bytes = [0u8; 4];
-                len_bytes.copy_from_slice(&self.out[..4]);
-                let len = u32::from_le_bytes(len_bytes) as usize;
-                let max_len = self.out.len().saturating_sub(4);
-                if let Some(inner) = self.inner.take() {
-                    drop_attached_future(inner);
-                }
-                Poll::Ready(Ok(len.min(max_len)))
-            }
-            RunStatus::Error => {
-                if let Some(inner) = self.inner.take() {
-                    drop_attached_future(inner);
-                }
-                Poll::Ready(Err(RunStatus::Error))
-            }
-        }
-    }
-}
-
-impl Drop for AttachedTcpRequest<'_> {
-    fn drop(&mut self) {
-        if let Some(inner) = self.inner.take() {
-            drop_attached_future(inner);
-        }
-    }
-}
-
 #[cfg(feature = "tokio")]
 pub unsafe extern "C" fn tokio_tcp_request(
     ctx: *mut c_void,
@@ -526,69 +421,6 @@ pub unsafe extern "C" fn tokio_tcp_request(
 }
 
 #[allow(dead_code)]
-unsafe fn waker_from_host(host: &HostWaker) -> Waker {
-    if host.vtable.is_null() {
-        fn noop_clone(_: *const ()) -> std::task::RawWaker {
-            noop_raw()
-        }
-        fn noop(_: *const ()) {}
-        fn noop_raw() -> std::task::RawWaker {
-            let vtable = &std::task::RawWakerVTable::new(noop_clone, noop, noop, noop);
-            std::task::RawWaker::new(std::ptr::null(), vtable)
-        }
-        return Waker::from_raw(noop_raw());
-    }
-
-    #[repr(C)]
-    struct HostProxy {
-        data: *mut c_void,
-        vtable: *const HostWakerVTable,
-    }
-
-    unsafe fn proxy_clone(data: *const ()) -> std::task::RawWaker {
-        let proxy = &*(data as *const HostProxy);
-        let data = ((*proxy.vtable).clone)(proxy.data);
-        let proxy = HostProxy {
-            data,
-            vtable: proxy.vtable,
-        };
-        std::task::RawWaker::new(Box::into_raw(Box::new(proxy)) as *const (), &PROXY_VTABLE)
-    }
-
-    unsafe fn proxy_wake(data: *const ()) {
-        let proxy = Box::from_raw(data as *mut HostProxy);
-        ((*proxy.vtable).wake)(proxy.data);
-    }
-
-    unsafe fn proxy_wake_by_ref(data: *const ()) {
-        let proxy = &*(data as *const HostProxy);
-        ((*proxy.vtable).wake_by_ref)(proxy.data);
-    }
-
-    unsafe fn proxy_drop(data: *const ()) {
-        let proxy = Box::from_raw(data as *mut HostProxy);
-        ((*proxy.vtable).drop)(proxy.data);
-    }
-
-    static PROXY_VTABLE: std::task::RawWakerVTable = std::task::RawWakerVTable::new(
-        proxy_clone,
-        proxy_wake,
-        proxy_wake_by_ref,
-        proxy_drop,
-    );
-
-    let data = ((*host.vtable).clone)(host.data);
-    let proxy = HostProxy {
-        data,
-        vtable: host.vtable,
-    };
-    Waker::from_raw(std::task::RawWaker::new(
-        Box::into_raw(Box::new(proxy)) as *const (),
-        &PROXY_VTABLE,
-    ))
-}
-
-#[allow(dead_code)]
 struct HostSleepFuture {
     future: Pin<Box<dyn Future<Output = ()> + Send>>,
 }
@@ -601,10 +433,7 @@ struct HostTcpFuture {
 }
 
 #[allow(dead_code)]
-unsafe extern "C" fn host_sleep_poll(
-    data: *mut c_void,
-    host_waker: *const HostWaker,
-) -> RunStatus {
+unsafe extern "C" fn host_sleep_poll(data: *mut c_void, host_waker: *const HostWaker) -> RunStatus {
     if data.is_null() || host_waker.is_null() {
         return RunStatus::Error;
     }
@@ -633,10 +462,7 @@ static HOST_SLEEP_VTABLE: AttachedFutureVTable = AttachedFutureVTable {
 };
 
 #[allow(dead_code)]
-unsafe extern "C" fn host_tcp_poll(
-    data: *mut c_void,
-    host_waker: *const HostWaker,
-) -> RunStatus {
+unsafe extern "C" fn host_tcp_poll(data: *mut c_void, host_waker: *const HostWaker) -> RunStatus {
     if data.is_null() || host_waker.is_null() {
         return RunStatus::Error;
     }
@@ -710,9 +536,9 @@ pub unsafe extern "C" fn tokio_spawn_sleep_ms(ctx: *mut c_void, ms: u64) {
     }
     let handle = &*(ctx as *const tokio::runtime::Handle);
     let _guard = handle.enter();
-    let _ = handle.spawn(async move {
+    drop(handle.spawn(async move {
         tokio::time::sleep(std::time::Duration::from_millis(ms)).await;
-    });
+    }));
 }
 
 #[cfg(not(feature = "tokio"))]
@@ -785,233 +611,5 @@ pub fn smol_runtime_vtable() -> HostRuntimeVTable {
         tcp_request: smol_tcp_request,
         spawn_sleep_ms: smol_spawn_sleep_ms,
         spawn_tcp_request: smol_spawn_tcp_request,
-    }
-}
-
-pub struct AttachedSleep {
-    ms: u64,
-    inner: Option<AttachedFuture>,
-}
-
-impl AttachedSleep {
-    pub fn new(ms: u64) -> Self {
-        Self { ms, inner: None }
-    }
-}
-
-impl Future for AttachedSleep {
-    type Output = ();
-
-    fn poll(mut self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let Some(runtime) = attached_runtime() else {
-            return Poll::Ready(());
-        };
-        let Some(host_waker) = current_host_waker() else {
-            return Poll::Ready(());
-        };
-
-        if self.inner.is_none() {
-            let fut = unsafe { (runtime.sleep_ms)(runtime.ctx, self.ms) };
-            if fut.vtable.is_null() {
-                return Poll::Ready(());
-            }
-            self.inner = Some(fut);
-        }
-
-        let fut = self.inner.as_mut().unwrap();
-        let status = unsafe { ((*fut.vtable).poll)(fut.data, host_waker as *const _) };
-        match status {
-            RunStatus::Pending => Poll::Pending,
-            _ => {
-                if let Some(inner) = self.inner.take() {
-                    drop_attached_future(inner);
-                }
-                Poll::Ready(())
-            }
-        }
-    }
-}
-
-impl Drop for AttachedSleep {
-    fn drop(&mut self) {
-        if let Some(inner) = self.inner.take() {
-            drop_attached_future(inner);
-        }
-    }
-}
-
-pub unsafe fn attach_tokio_runtime(vtable: *const HostRuntimeVTable) -> bool {
-    if vtable.is_null() {
-        ATTACHED_RUNTIME.store(std::ptr::null_mut(), Ordering::Release);
-        return false;
-    }
-    ATTACHED_RUNTIME.store(vtable as *mut HostRuntimeVTable, Ordering::Release);
-    true
-}
-
-pub fn attached_runtime() -> Option<&'static HostRuntimeVTable> {
-    let ptr = ATTACHED_RUNTIME.load(Ordering::Acquire);
-    if ptr.is_null() {
-        return None;
-    }
-    Some(unsafe { &*ptr })
-}
-
-pub fn attached_runtime_available() -> bool {
-    attached_runtime().is_some()
-}
-
-#[allow(dead_code)]
-pub fn spawn_detached_sleep(ms: u64) -> bool {
-    let Some(runtime) = attached_runtime() else {
-        return false;
-    };
-    unsafe { (runtime.spawn_sleep_ms)(runtime.ctx, ms) };
-    true
-}
-
-#[allow(dead_code)]
-pub fn spawn_detached_tcp_request(addr: &str, payload: &[u8]) -> bool {
-    if addr.is_empty() {
-        return false;
-    }
-    let Some(runtime) = attached_runtime() else {
-        return false;
-    };
-    unsafe {
-        (runtime.spawn_tcp_request)(
-            runtime.ctx,
-            addr.as_ptr(),
-            addr.len(),
-            payload.as_ptr(),
-            payload.len(),
-        )
-    };
-    true
-}
-
-thread_local! {
-    static CURRENT_HOST_WAKER: Cell<*const HostWaker> = Cell::new(std::ptr::null());
-}
-
-pub fn set_attached_host_waker(waker: *const HostWaker) {
-    CURRENT_HOST_WAKER.with(|cell| cell.set(waker));
-}
-
-pub fn clear_attached_host_waker() {
-    CURRENT_HOST_WAKER.with(|cell| cell.set(std::ptr::null()));
-}
-
-fn current_host_waker() -> Option<&'static HostWaker> {
-    let ptr = CURRENT_HOST_WAKER.with(|cell| cell.get());
-    if ptr.is_null() {
-        None
-    } else {
-        Some(unsafe { &*ptr })
-    }
-}
-
-struct HostWakerState {
-    waker: Waker,
-}
-
-unsafe extern "C" fn host_waker_clone(data: *mut c_void) -> *mut c_void {
-    if data.is_null() {
-        return std::ptr::null_mut();
-    }
-    let state = &*(data as *mut HostWakerState);
-    let cloned = HostWakerState {
-        waker: state.waker.clone(),
-    };
-    Box::into_raw(Box::new(cloned)) as *mut c_void
-}
-
-unsafe extern "C" fn host_waker_wake(data: *mut c_void) {
-    if data.is_null() {
-        return;
-    }
-    let state = Box::from_raw(data as *mut HostWakerState);
-    state.waker.wake();
-}
-
-unsafe extern "C" fn host_waker_wake_by_ref(data: *mut c_void) {
-    if data.is_null() {
-        return;
-    }
-    let state = &*(data as *mut HostWakerState);
-    state.waker.wake_by_ref();
-}
-
-unsafe extern "C" fn host_waker_drop(data: *mut c_void) {
-    if data.is_null() {
-        return;
-    }
-    drop(Box::from_raw(data as *mut HostWakerState));
-}
-
-static HOST_WAKER_VTABLE: HostWakerVTable = HostWakerVTable {
-    clone: host_waker_clone,
-    wake: host_waker_wake,
-    wake_by_ref: host_waker_wake_by_ref,
-    drop: host_waker_drop,
-};
-
-struct HostWakerGuard {
-    data: *mut c_void,
-}
-
-impl Drop for HostWakerGuard {
-    fn drop(&mut self) {
-        unsafe { (HOST_WAKER_VTABLE.drop)(self.data) };
-    }
-}
-
-fn host_waker_from(waker: &Waker) -> (HostWaker, HostWakerGuard) {
-    let state = HostWakerState {
-        waker: waker.clone(),
-    };
-    let data = Box::into_raw(Box::new(state)) as *mut c_void;
-    let host_waker = HostWaker {
-        data,
-        vtable: &HOST_WAKER_VTABLE,
-    };
-    (host_waker, HostWakerGuard { data })
-}
-
-pub struct AttachedFutureTask {
-    future: AttachedFuture,
-}
-
-impl AttachedFutureTask {
-    pub fn new(future: AttachedFuture) -> Option<Self> {
-        if future.vtable.is_null() {
-            return None;
-        }
-        Some(Self { future })
-    }
-}
-
-impl Future for AttachedFutureTask {
-    type Output = RunStatus;
-
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let (host_waker, _guard) = host_waker_from(cx.waker());
-        let vtable = unsafe { &*self.future.vtable };
-        let status = unsafe { (vtable.poll)(self.future.data, &host_waker as *const _) };
-        match status {
-            RunStatus::Pending => Poll::Pending,
-            _ => Poll::Ready(status),
-        }
-    }
-}
-
-impl Drop for AttachedFutureTask {
-    fn drop(&mut self) {
-        if self.future.vtable.is_null() || self.future.data.is_null() {
-            return;
-        }
-        let vtable = unsafe { &*self.future.vtable };
-        unsafe { (vtable.drop)(self.future.data) };
-        self.future.data = std::ptr::null_mut();
     }
 }

@@ -1,78 +1,80 @@
 # flow-reloader
 
-Hot-reload framework for Rust logic crates, with optional attached async runtime support and snapshot state persistence.
+Hot-reload trusted Rust logic while keeping the host process, connections and UI alive.
+The current target is reliable **development-time** updates for servers, games and desktop applications.
 
-This workspace contains:
+The recommended API is message-oriented: the host owns resources and admission;
+logic runs in generation-bound tasks. Choose **Drain** to finish existing work on old
+code, or **Restart** to stop registered workers cooperatively and recreate them from
+versioned checkpoints. Arbitrary Future stacks and external I/O effects are not migrated.
 
-- `flow_reload`: host/runtime crate and public API
-- `hot_macro`: proc macros (`#[reload_direct]`, `#[reload_snapshot]`, `#[reload_init]`)
-- `interface`: ABI-safe shared types (`AppState`, metadata, cartridge API)
-- `examples/*`: runnable host + logic samples
+## Try it
 
-## Why This Project
+Run commands from the workspace root with Rust/Cargo installed:
 
-`flow-reloader` is designed for workflows where the host process stays alive while logic is rebuilt and reloaded as a dynamic library.
-
-Core goals:
-
-- Keep host process state stable while swapping logic
-- Detect ABI/state incompatibilities at runtime
-- Support both sync and async logic entrypoints
-- Allow optional state snapshots between reloads
-
-## Features
-
-- Dynamic library reload with file watcher integration
-- Runtime metadata validation (`ABI_VERSION`, `AppState` size, allocator tag on Windows)
-- Attached async bridge for `tokio`, `async-std`, and `smol` hosts
-- Snapshot cartridge (`AppState::cartridge`) with pluggable serialization
-- Host macro utilities (`flow_reload::main!`, `flow_reload::allocator!`)
-
-## Quick Start
-
-Run a sample host:
-
-```bash
-cargo run -p sync_host
+```sh
+cargo run -p service_host
+cargo run -p flow_reload --example restart
+cargo run -p tauri_tokio
 ```
 
-Then edit logic code:
+Run one example at a time:
 
-- `examples/sync_logic/src/lib.rs`
+- `service_host`: send newline-terminated text to `127.0.0.1:4000`, edit
+  `examples/service_logic/src/lib.rs`, then send another message on the same connection.
+  Transport stays in the host; new requests use the new generation.
+- `restart`: a small static example of cooperative shutdown, checkpoint migration and load budgets.
+- `tauri_tokio`: a Tauri GUI with an in-window Rust editor, Drain/Restart controls,
+  counter and build diagnostics. Requires the platform's Tauri build prerequisites;
+  no npm or Tauri CLI is needed. The package name is historical; its logic uses the message API.
 
-The host rebuilds and reloads logic automatically in debug builds.
+See [all examples](examples/README.md), [English documentation](docs/README.md),
+or [日本語ドキュメント](docs_ja/README.md).
 
-More samples:
+## Contracts and limits
 
-- `cargo run -p async_tokio_host`
-- `cargo run -p async_std_host`
-- `cargo run -p async_smol_host`
-- `cargo run -p snapshot_host`
-- `cargo run -p tauri_tokio`
+- Native-loading APIs are `unsafe`: all loaded code, including initialization,
+  finalization and callbacks, must follow the SDK contracts. Metadata validation
+  does not isolate untrusted native code.
+- Host resources use service IDs/versions and copied byte buffers, rather than
+  sharing Rust objects across DLL ownership boundaries. Operations are short and synchronous.
+- Tasks and resource registries are bound to their owner thread. Hosts drive polling;
+  independent spawn tasks and callbacks are not automatically tracked or joined.
+- The message path uses **Handler ABI 2**, Services ABI 1 and task-control ABI 1.
+  Rebuild host and logic together after ABI changes.
+- Native images default to **KeepLoaded**, including abandoned or invalid loaded
+  candidates. Code and temporary copies can accumulate. This preserves code lifetime,
+  not borrowed data lifetime or task termination.
+- `RouterOptions` defaults to 32 cumulative load attempts per shared
+  `GenerationBudget` and 1 MiB per worker checkpoint. Failed native loads consume
+  budget too; completion does not refund it. Restart the development process when exhausted.
+- DLL copies live under the user's temporary directory at `flow-reloader/<PID>/`.
+  They may remain after exit; remove them only after the corresponding process has ended.
 
-## Documentation
+The older `FlowRunner` / `AppState` / attached-runtime API remains available with
+**ABI v4**. Its sync, snapshot and Tokio/async-std/smol examples are compatibility
+examples, not the starting point for the message API. Windows allocator-tag checks
+and `flow_reload::allocator!()` belong to that older path. See the
+[API reference](docs/API_REFERENCE.md) and [DLL lifetime contracts](docs_ja/UNLOAD_SAFETY.md).
 
-- `docs/README.md`: documentation index
-- `docs/GETTING_STARTED.md`: integrate into your own host/logic crates
-- `docs/API_REFERENCE.md`: macros, runtime APIs, and feature flags
-- `docs/PRODUCTION_GUIDE.md`: deployment and production checklist
-- `docs/TROUBLESHOOTING.md`: common failures and recovery paths
-- `docs_ja/README.md`: Japanese documentation index
+## Workspace
 
-## Example Layout
+| Crate | Role |
+| --- | --- |
+| `flow_reload` | Host resources, task ownership, routing and compatibility adapters |
+| `hot_macro` | `reload_handler` and the older direct/snapshot/init proc macros |
+| `interface` | Versioned C ABI tables, opaque handles and compatibility state |
+| `examples` | Runnable native hosts and logic crates |
 
-```text
-examples/
-  sync_logic/        # logic crate (cdylib + rlib)
-  sync_host/         # host process loading the logic library
-  async_tokio_logic/ # async logic using attached runtime helpers
-  async_tokio_host/  # tokio host driving attached futures
-  snapshot_logic/    # state snapshot logic with serde cartridge
-  snapshot_host/     # host decoding cartridge for visibility
+## Verify changes
+
+```sh
+cargo fmt --all -- --check
+cargo clippy -p interface -p hot_macro -p flow_reload --all-targets --all-features -- -D warnings
+cargo test --workspace --exclude tauri_tokio --all-features
+cargo test -p interface -p hot_macro -p flow_reload --release --all-features
 ```
 
-## Notes
-
-- In debug mode, host helpers auto-build and watch source changes.
-- In release mode, logic entrypoints are called directly and no auto-build/watch loop is used.
-- On Windows, use `flow_reload::allocator!()` in logic crates to match host allocator expectations.
+See [testing and scope](docs/TESTING.md) for native DLL fixtures, the GUI backend
+test, Miri setup and CI coverage. Miri, native DLL tests and interactive GUI checks
+cover different behavior; none establishes safety for arbitrary plugins.

@@ -1,38 +1,47 @@
 <!doctype html>
 <html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Reactor Reloader | Tauri Tokio</title>
-    <link rel="stylesheet" href="styles.css" />
-  </head>
-  <body>
-    <main class="app">
-      <header>
-        <h1>Reactor Reloader</h1>
-        <p class="tagline">Tauri v2 + Tokio attached hot-reload</p>
-      </header>
-
-      <section class="panel">
-        <div class="row">
-          <span class="label">Status</span>
-          <span id="status" class="value">Booting…</span>
-        </div>
-        <div class="row">
-          <span class="label">Counter</span>
-          <span id="counter" class="value">-</span>
-        </div>
-        <div class="row">
-          <span class="label">Message</span>
-          <span id="message" class="value">Waiting for events…</span>
-        </div>
+<head>
+  <meta charset="UTF-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Flow Reload Lab</title><link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <main class="app">
+    <header class="topbar">
+      <a class="brand" href="#"><span class="brand-icon">f.</span><span>FLOW<span class="brand-sub">RELOAD LAB</span></span></a>
+      <div class="top-meta"><span id="host-id">HOST —</span><span class="live-dot"></span><span id="uptime">0s</span><span class="pill">TAURI / RUST</span></div>
+    </header>
+    <section class="intro"><div><span class="eyebrow">A LIVING RUST WORKSPACE</span><h1>Change the code.<em> Keep it running.</em></h1><p>Edit the Rust code on the right. Save to reload logic in the same window.</p></div><div class="status-box"><span id="status-dot" class="live-dot"></span><span id="status">Starting up</span></div></section>
+    <section class="workspace">
+      <div class="preview-column">
+        <section class="preview card">
+          <div class="section-label"><span>01 / LIVE PREVIEW</span><span class="chip" id="worker-generation">worker / —</span></div>
+          <div class="preview-heading"><span id="logic-label">Preparing logic</span><span id="step" class="step">+— / tick</span></div>
+          <div id="counter" class="counter">0</div><span class="counter-label">PERSISTENT WORKER COUNTER</span>
+          <svg class="spark" viewBox="0 0 360 54" role="img" aria-label="Counter history"><path d="M0 53H360" class="baseline"/><polyline id="spark" points="0,48 360,48" /></svg>
+          <div class="preview-stats"><div><small>New requests</small><strong id="generation">—</strong></div><div><small>Checkpoint</small><strong id="checkpoint">0</strong></div><div><small>In flight</small><strong id="in-flight">0</strong></div></div>
+        </section>
+        <section class="requests card">
+          <div class="section-label"><span>02 / SEND A REQUEST</span><span id="budget">LOADS 0 / 32</span></div>
+          <label class="sr-only" for="message">Message</label><input id="message" value="Hello, hot reload" maxlength="120" />
+          <div class="button-row"><button id="send" class="secondary">Send now <span>↗</span></button><button id="send-slow" class="secondary">5-second request <span>◷</span></button></div>
+          <div id="replies" class="replies"><p class="empty">Each reply shows the generation that handled the request.</p></div>
+        </section>
+      </div>
+      <section class="editor card">
+        <div class="section-label"><span>03 / EDIT THE LOGIC</span><span id="editor-state">Loading</span></div>
+        <div class="editor-toolbar"><span class="filename">lib.rs <span>tauri_tokio_logic / src</span></span><button id="read" class="text-button">Reload file</button></div>
+        <div class="code-surface"><pre id="line-numbers" aria-hidden="true"></pre><textarea id="source" aria-label="Rust logic source" spellcheck="false" autocapitalize="off" autocomplete="off" wrap="off"></textarea></div>
+        <div class="presets"><span>Try a change</span><button id="preset-v1">v1 · +1</button><button id="preset-v2">v2 · +5</button><button id="preset-error">Build error</button><button id="initial">Initial source</button></div>
+        <div class="reload-settings"><label for="mode">Reload on save</label><select id="mode"><option value="restart">Restart — update the worker</option><option value="drain">Drain — update new requests</option></select></div>
+        <p id="mode-hint" class="hint">Restart updates the worker and restores its saved counter.</p>
+        <div class="save-row"><button id="save" class="primary">Save &amp; reload <span>⌘ / Ctrl + S</span></button><button id="rebuild" class="icon-button" title="Rebuild the saved file" aria-label="Rebuild">↻</button><button id="resume" class="text-button" hidden>Resume requests</button></div>
+        <p id="editor-message" class="editor-message">Try changing LABEL, ACCENT or STEP.</p>
       </section>
-
-      <footer>
-        <span>Event: <code>hot_state</code></span>
-      </footer>
-    </main>
-
-    <script src="main.js"></script>
-  </body>
+    </section>
+    <section class="activity card"><div class="section-label"><span>04 / ACTIVITY</span><span>HOST STAYS RUNNING</span></div><ol id="logs"><li>Preparing the first build…</li></ol></section>
+    <details id="diagnostics"><summary>Build details</summary><pre id="build-error"></pre></details>
+    <footer><span>Rust logic → native DLL → same window</span><span>Separate host and logic lifetimes.</span></footer>
+  </main>
+  <script src="main.js"></script>
+</body>
 </html>

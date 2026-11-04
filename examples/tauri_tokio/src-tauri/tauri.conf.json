@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Reactor Reloader Tauri",
+  "productName": "Flow Reload Lab",
   "version": "0.1.0",
   "identifier": "com.reactorreloader.tauri_tokio",
   "build": {
@@ -10,13 +10,17 @@
     "withGlobalTauri": true,
     "security": {
       "csp": null,
-      "capabilities": ["default"]
+      "capabilities": [
+        "default"
+      ]
     },
     "windows": [
       {
-        "title": "Reactor Reloader (Tauri Tokio)",
-        "width": 960,
-        "height": 600
+        "title": "Flow Reload Lab — Rust hot reload",
+        "width": 1180,
+        "height": 850,
+        "minWidth": 940,
+        "minHeight": 720
       }
     ]
   },

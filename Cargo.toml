@@ -13,6 +13,8 @@ members = [
     "examples/async_smol_host",
     "examples/snapshot_logic",
     "examples/snapshot_host",
+    "examples/service_logic",
+    "examples/service_host",
     "examples/tauri_tokio_logic",
     "examples/tauri_tokio/src-tauri",
 ]

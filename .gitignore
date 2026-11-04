@@ -1,3 +1,4 @@
 target/
 del/
 Cargo.lock
+examples/tauri_tokio/src-tauri/gen/schemas/

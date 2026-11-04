@@ -17,7 +17,7 @@ impl RuntimeHandle {
     }
 
     pub fn std() -> Self {
-        Self::new(StdRuntime::default())
+        Self::new(StdRuntime)
     }
 
     pub fn sleep(&self, duration: Duration) {
@@ -61,7 +61,8 @@ pub struct TokioRuntimeHandle(pub tokio::runtime::Handle);
 #[cfg(feature = "tokio")]
 impl RuntimeBridge for TokioRuntimeHandle {
     fn sleep(&self, duration: Duration) {
-        self.0.block_on(tokio::time::sleep(duration));
+        self.0
+            .block_on(async { tokio::time::sleep(duration).await });
     }
 }
 
@@ -156,5 +157,28 @@ impl RuntimeAdapter for TokioAdapter {
 
     fn block_on(handle: &Self::Handle, task: AttachedFutureTask) -> RunStatus {
         handle.block_on(task)
+    }
+}
+
+#[cfg(all(test, feature = "tokio"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tokio_sleep_can_be_created_outside_runtime_context() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .unwrap();
+        let bridge = TokioRuntimeHandle(runtime.handle().clone());
+        runtime.block_on(async {
+            // Drive the current-thread timer while sleeping through its handle
+            // from a thread that has not entered the runtime.
+            let thread = std::thread::spawn(move || bridge.sleep(Duration::from_millis(1)));
+            while !thread.is_finished() {
+                tokio::task::yield_now().await;
+            }
+            thread.join().unwrap();
+        });
     }
 }

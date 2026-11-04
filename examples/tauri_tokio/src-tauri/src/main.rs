@@ -1,112 +1,74 @@
-use flow_reload::{FlowRunner, RunStatus};
-use serde::Serialize;
-use tauri::Emitter;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpListener;
+#![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
 
-#[derive(Clone, Serialize)]
-struct HotState {
-    counter: i32,
-    message: String,
+mod engine;
+
+use engine::{Command, Controller, Dashboard};
+use tauri::State;
+
+#[tauri::command]
+fn get_dashboard(state: State<'_, Controller>) -> Dashboard {
+    state.snapshot()
+}
+#[tauri::command]
+fn read_source(state: State<'_, Controller>) -> Result<String, String> {
+    state.read_source()
+}
+#[tauri::command]
+fn initial_source(state: State<'_, Controller>) -> String {
+    state.initial_source.clone()
+}
+#[tauri::command]
+fn save_source(source: String, state: State<'_, Controller>) -> Result<(), String> {
+    state.save_source(source)
+}
+#[tauri::command]
+fn rebuild(state: State<'_, Controller>) -> Result<(), String> {
+    state.send(Command::Build)
+}
+#[tauri::command]
+fn set_reload_mode(mode: String, state: State<'_, Controller>) -> Result<(), String> {
+    if mode != "drain" && mode != "restart" {
+        return Err("Unknown reload mode".into());
+    }
+    state.send(Command::Mode(mode))
+}
+#[tauri::command]
+fn send_request(text: String, slow: bool, state: State<'_, Controller>) -> Result<(), String> {
+    if text.len() > 256 {
+        return Err("Message must be no longer than 256 bytes".into());
+    }
+    state.send(Command::Request { text, slow })
+}
+#[tauri::command]
+fn resume(state: State<'_, Controller>) -> Result<(), String> {
+    state.send(Command::Resume)
 }
 
 fn main() {
+    let controller = Controller::new().expect("sample source must be present");
+    let stop = controller.stop.clone();
+    let engine = controller.spawn();
+    let mut engine = Some(engine);
     tauri::Builder::default()
-        .setup(|app| {
-            let app_handle = app.handle().clone();
-            std::thread::spawn(move || {
-                if let Err(err) = run_hot_loop(app_handle) {
-                    eprintln!("hot loop failed: {err}");
+        .manage(controller)
+        .invoke_handler(tauri::generate_handler![
+            get_dashboard,
+            read_source,
+            initial_source,
+            save_source,
+            rebuild,
+            set_reload_mode,
+            send_request,
+            resume
+        ])
+        .build(tauri::generate_context!())
+        .expect("failed to create the sample window")
+        .run(move |_, event| {
+            if matches!(event, tauri::RunEvent::Exit) {
+                stop.store(true, std::sync::atomic::Ordering::Release);
+                if let Some(engine) = engine.take() {
+                    let _ = engine.join();
                 }
-            });
-            Ok(())
-        })
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
-}
-
-fn run_hot_loop(app_handle: tauri::AppHandle) -> Result<(), Box<dyn std::error::Error>> {
-    let logic_path = logic_library_path()?;
-    let mut state = flow_reload::AppState::default();
-    let mut runner = FlowRunner::new(&logic_path)?;
-    let rt = tokio::runtime::Runtime::new()?;
-    let handle = rt.handle().clone();
-    start_echo_server(&handle);
-
-    loop {
-        let status = runner.run_attached_with_tokio(&mut state, &handle)?;
-        if status == RunStatus::Error {
-            eprintln!("Logic returned error status.");
-        }
-        let payload = HotState {
-            counter: state.counter,
-            message: read_message(&state.message),
-        };
-        let _ = app_handle.emit("hot_state", payload);
-        if runner.reload_if_needed()? {
-            let _ = app_handle.emit("hot_reload", ());
-        }
-    }
-}
-
-fn start_echo_server(handle: &tokio::runtime::Handle) {
-    let handle = handle.clone();
-    handle.spawn(async move {
-        let listener = match TcpListener::bind("127.0.0.1:4001").await {
-            Ok(listener) => listener,
-            Err(err) => {
-                eprintln!("Failed to bind echo server: {err}");
-                return;
             }
-        };
-
-        loop {
-            let (mut socket, _) = match listener.accept().await {
-                Ok(value) => value,
-                Err(err) => {
-                    eprintln!("Echo accept failed: {err}");
-                    continue;
-                }
-            };
-            tokio::spawn(async move {
-                let mut buf = [0u8; 256];
-                let Ok(n) = socket.read(&mut buf).await else {
-                    return;
-                };
-                if n == 0 {
-                    return;
-                }
-                let _ = socket.write_all(&buf[..n]).await;
-            });
-        }
-    });
-}
-
-fn logic_library_path() -> Result<std::path::PathBuf, Box<dyn std::error::Error>> {
-    if let Ok(path) = std::env::var("LOGIC_LIB_PATH") {
-        return Ok(std::path::PathBuf::from(path));
-    }
-
-    let manifest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let examples_dir = manifest_dir.join("..").join("..");
-    let logic_manifest_dir = examples_dir.join("tauri_tokio_logic");
-    let target_dir = flow_reload::internal::default_target_dir(&logic_manifest_dir);
-    let status = flow_reload::internal::build_logic(
-        "tauri_tokio_logic",
-        &logic_manifest_dir,
-        &target_dir,
-    )?;
-    if !status.success() {
-        return Err("failed to build tauri_tokio_logic".into());
-    }
-
-    Ok(flow_reload::internal::library_path_in(
-        &target_dir,
-        "tauri_tokio_logic",
-    ))
-}
-
-fn read_message(bytes: &[u8; 256]) -> String {
-    let len = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len());
-    String::from_utf8_lossy(&bytes[..len]).to_string()
+        });
 }

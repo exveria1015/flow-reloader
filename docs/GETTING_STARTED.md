@@ -1,15 +1,29 @@
-# Getting Started
+# Getting started
 
-This guide shows how to integrate `flow-reloader` into your own project.
+## Run an existing example
 
-## 1. Create Two Crates
+From the workspace root:
 
-Use a split architecture:
+```sh
+cargo run -p service_host
+```
 
-- Host crate: long-lived process (`bin`)
-- Logic crate: hot-swapped dynamic library (`cdylib`)
+Connect to `127.0.0.1:4000` with a TCP client and send newline-terminated messages.
+Edit the response label in [service_logic](../examples/service_logic/src/lib.rs),
+save it, then send another message on the **same connection**. The host rebuilds
+logic and switches new admissions after a successful load. `slow\n` takes about
+five seconds, allowing an old request to remain active during a Drain cutover.
 
-Logic `Cargo.toml`:
+This is a single-connection example. Builds are synchronous, and edits while
+waiting for input are processed at the next message boundary. Use the
+[Tauri GUI lab](TAURI_GUI_LAB.md) for an editor and background builds,
+or `cargo run -p flow_reload --example restart` for a minimal migration example.
+
+## Split a new application
+
+Create a long-lived host binary and a logic `cdylib`. Both depend on the local
+`flow_reload` crate. The message host does not need a static dependency on the
+logic crate. For example, a logic crate at `examples/my_logic` can use:
 
 ```toml
 [package]
@@ -18,125 +32,60 @@ version = "0.1.0"
 edition = "2021"
 
 [lib]
-crate-type = ["cdylib", "rlib"]
+crate-type = ["cdylib"]
 
 [dependencies]
-flow_reload = { path = "../flow_reload" }
+flow_reload = { path = "../../flow_reload" }
 ```
 
-Host `Cargo.toml`:
+Add the crate to workspace members. Define service IDs, versions, operations and
+byte encodings shared by host and logic. Increment the contract version when its
+meaning changes; matching IDs alone do not validate an encoding.
 
-```toml
-[dependencies]
-flow_reload = { path = "../flow_reload" }
-my_logic = { path = "../my_logic" }
-```
-
-## 2. Write Logic Entry Points
-
-`src/lib.rs` in logic crate:
+The logic handler receives owned input and an opaque resource ID:
 
 ```rust
-use flow_reload::{allocator, reload_direct, reload_init, AppState};
+use flow_reload::{RequestContext, ServiceError, ServiceKey};
+const SESSION: ServiceKey = ServiceKey::new(0x4c49_4e45, 1);
 
-allocator!();
-
-static mut HOST_CONTEXT: u64 = 0;
-
-#[reload_init]
-pub fn init(ctx: &mut u64) {
-    unsafe { HOST_CONTEXT = *ctx; }
-}
-
-#[reload_direct]
-pub fn update(state: &mut AppState) {
-    let ctx = unsafe { HOST_CONTEXT };
-    state.counter += 1;
-    state.set_message(&format!("counter={} ctx={}", state.counter, ctx));
+#[flow_reload::reload_handler(SESSION)]
+async fn handle(ctx: RequestContext) -> Result<(), ServiceError> {
+    ctx.call(0, ctx.input(), &mut [])?;
+    Ok(())
 }
 ```
 
-## 3. Build and Run from Host
+On the host, implement `HostResource::call` with short, nonblocking operations,
+register it in `HostResources`, and keep actual sockets, framing and I/O in the
+host. Operation 0 above must be defined by that implementation, for example as
+placing bytes in a bounded outgoing queue. Use
+[service_host](../examples/service_host/src/main.rs) as the complete host example.
 
-`src/main.rs` in host crate:
+Load the built artifact with `unsafe RequestRouter::load(path, resources)`.
+The unsafe boundary requires trusted SDK-compatible native code, including all
+future replacements and module initialization. `dispatch(resource.id(), input)`
+returns a thread-bound Future; the host must poll it. Input is copied before
+`dispatch` returns. The resource registry and code generation stay alive through
+owned handles; the socket itself never crosses the DLL boundary.
 
-```rust
-use flow_reload::{FlowRunner, RunStatus};
-use std::time::Duration;
+## Select an update policy
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let logic_path = logic_library_path()?;
-    let mut state = flow_reload::AppState::default();
-    let mut context = 123_u64;
-    let mut runner = FlowRunner::with_context(&logic_path, &mut context)?;
+- **Drain**: build, `unsafe prepare(path)`, then `activate(candidate)`. Existing
+  tasks keep their generation. New requests use the new handler. Service and
+  checkpoint schema contracts must match.
+- **Restart**: register long-lived work using `start_worker`, publish explicit
+  checkpoints, and use `restart(candidate, migrate)`. The host continues polling
+  externally owned tasks while Restart waits for shutdown. Only registered workers
+  are recreated; ordinary requests are not replayed.
 
-    loop {
-        let status = runner.run(&mut state)?;
-        if status == RunStatus::Error {
-            eprintln!("logic returned error");
-        }
+See the detailed [routing](../docs_ja/HOST_RESOURCES_AND_ROUTING.md) and
+[Restart](../docs_ja/RESTART_AND_MIGRATION.md) contracts before integrating workers.
 
-        if runner.reload_if_needed()? {
-            println!("reloaded");
-        }
+## Compatibility API
 
-        std::thread::sleep(Duration::from_millis(16));
-    }
-}
-
-fn logic_library_path() -> Result<std::path::PathBuf, Box<dyn std::error::Error>> {
-    if let Ok(path) = std::env::var("LOGIC_LIB_PATH") {
-        return Ok(path.into());
-    }
-
-    let manifest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let logic_manifest_dir = manifest_dir.join("..").join("my_logic");
-    let target_dir = flow_reload::internal::default_target_dir(&logic_manifest_dir);
-    let status = flow_reload::internal::build_logic("my_logic", &logic_manifest_dir, &target_dir)?;
-    if !status.success() {
-        return Err("logic build failed".into());
-    }
-    Ok(flow_reload::internal::library_path_in(&target_dir, "my_logic"))
-}
-```
-
-## 4. Optional: Use `flow_reload::main!`
-
-If your host setup matches the framework loop, use the macro:
-
-```rust
-flow_reload::main!(my_logic);
-```
-
-With context and custom runtime:
-
-```rust
-flow_reload::main!(my_logic, flow_reload::AppState, 123_u64, runtime: my_runtime);
-```
-
-Debug mode behavior:
-
-- Auto-build logic crate
-- Watch `src/`, `Cargo.toml`, and `build.rs`
-- Reload on change with debounce
-
-## 5. Attached Async Runtime (Optional)
-
-Enable a host feature and call attached run methods:
-
-- `tokio`: `run_attached_with_tokio`
-- `async-std`: `run_attached_with_async_std`
-- `smol`: `run_attached_with_smol`
-
-Logic can use:
-
-- `AttachedSleep`
-- `AttachedTcpRequest`
-- `spawn_detached_sleep`
-- `spawn_detached_tcp_request`
-
-## Environment Variables
-
-- `LOGIC_LIB_PATH`: force a specific dynamic library path
-- `FLOW_RELOAD_LOGIC_MANIFEST_DIR`: override logic crate directory for macro-based host loops
-
+`FlowRunner`, `AppState`, `main!` and attached runtime helpers remain available.
+They use ABI v4, separately from Handler ABI 2. Start with their
+[compatibility samples](../examples/README.md), not a raw-context integration.
+All `with_context*` constructors are unsafe and require matching types, exclusive
+access and lifetime through every escaped access and destructor. The safe
+context forms of `main!` were removed.

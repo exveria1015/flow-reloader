@@ -1,25 +1,31 @@
-use crate::{AppState, FuncType, RunStatus, RuntimeHandle, ABI_VERSION, ALLOCATOR_TAG_SYSTEM};
-#[cfg(any(feature = "tokio", feature = "async-std", feature = "smol"))]
-use crate::runtime::RuntimeAdapter;
-#[cfg(feature = "tokio")]
-use crate::runtime::TokioAdapter;
 #[cfg(feature = "async-std")]
 use crate::runtime::AsyncStdAdapter;
+#[cfg(any(feature = "tokio", feature = "async-std", feature = "smol"))]
+use crate::runtime::RuntimeAdapter;
 #[cfg(feature = "smol")]
 use crate::runtime::SmolAdapter;
-use interface::{EntryFn, InitFn, Metadata, MetadataFn};
+#[cfg(feature = "tokio")]
+use crate::runtime::TokioAdapter;
+#[cfg(any(target_os = "windows", test))]
+use crate::ALLOCATOR_TAG_SYSTEM;
+use crate::{AppState, FuncType, RunStatus, RuntimeHandle, ABI_VERSION};
+use interface::MakeAttachedFutureFn;
 #[cfg(any(feature = "tokio", feature = "async-std", feature = "smol"))]
-use interface::{
-    AttachRuntimeFn, AttachedSupportedFn, MakeAttachedFutureFn, ResetAttachedFn,
-};
-use libloading::Library;
+use interface::{AttachRuntimeFn, AttachedSupportedFn};
+use interface::{EntryFn, InitFn, Metadata, MetadataFn, ResetAttachedFn};
 use notify::{EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use std::error::Error;
-use std::fmt;
 use std::ffi::c_void;
+use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH};
+
+mod blocking;
+mod generation;
+pub(crate) use blocking::run_borrowed;
+pub(crate) use generation::GenerationOwner;
+pub use generation::{collect_retired_libraries, UnloadPolicy};
 
 pub struct FlowRunner {
     load_id: u64,
@@ -27,8 +33,7 @@ pub struct FlowRunner {
     reload_watcher: Option<ReloadWatcher>,
     init_context: Option<*mut c_void>,
     runtime: RuntimeHandle,
-    #[cfg(any(feature = "tokio", feature = "async-std", feature = "smol"))]
-    attached_runtime: Option<Box<interface::HostRuntimeVTable>>,
+    unload_policy: UnloadPolicy,
 }
 
 #[derive(Debug)]
@@ -36,14 +41,25 @@ pub enum RunnerError {
     Io(std::io::Error),
     LibLoading(libloading::Error),
     Notify(notify::Error),
-    AbiVersion { expected: u32, found: u32 },
-    StateSize { expected: u32, found: u32 },
-    AllocatorTag { expected: u32, found: u32 },
+    AbiVersion {
+        expected: u32,
+        found: u32,
+    },
+    StateSize {
+        expected: u32,
+        found: u32,
+    },
+    AllocatorTag {
+        expected: u32,
+        found: u32,
+    },
     InitFailed,
-    InitError { status: RunStatus },
+    AsyncRequiresRun,
+    InitError {
+        status: RunStatus,
+    },
     #[cfg(any(feature = "tokio", feature = "async-std", feature = "smol"))]
     AttachedUnavailable,
-    #[cfg(any(feature = "tokio", feature = "async-std", feature = "smol"))]
     AttachedInvalid,
     #[cfg(any(feature = "tokio", feature = "async-std", feature = "smol"))]
     AttachedAttachFailed,
@@ -62,13 +78,16 @@ impl fmt::Display for RunnerError {
                 write!(f, "AppState size mismatch: host {expected}, logic {found}")
             }
             RunnerError::AllocatorTag { expected, found } => {
-                write!(f, "Allocator mismatch: expected tag {expected}, logic {found}")
+                write!(
+                    f,
+                    "Allocator mismatch: expected tag {expected}, logic {found}"
+                )
             }
             RunnerError::InitFailed => write!(f, "hot_init failed"),
+            RunnerError::AsyncRequiresRun => write!(f, "async logic requires run() or run_until_done(); run_once() cannot retain a borrowed state"),
             RunnerError::InitError { status } => write!(f, "hot_init error: {status:?}"),
             #[cfg(any(feature = "tokio", feature = "async-std", feature = "smol"))]
             RunnerError::AttachedUnavailable => write!(f, "attached async entry not available"),
-            #[cfg(any(feature = "tokio", feature = "async-std", feature = "smol"))]
             RunnerError::AttachedInvalid => write!(f, "attached async entry invalid"),
             #[cfg(any(feature = "tokio", feature = "async-std", feature = "smol"))]
             RunnerError::AttachedAttachFailed => write!(f, "failed to attach runtime"),
@@ -106,18 +125,48 @@ impl From<notify::Error> for RunnerError {
 }
 
 impl FlowRunner {
-    pub fn new<P: AsRef<Path>>(logic_path: P) -> Result<Self, RunnerError> {
-        Self::with_context_ptr_and_runtime(logic_path, std::ptr::null_mut(), RuntimeHandle::std())
+    /// The default keeps retired libraries loaded, including after runner drop.
+    ///
+    /// # Safety
+    /// The DLL and every future replacement loaded from this path must be
+    /// trusted code satisfying this SDK's ABI and task ownership contracts.
+    /// This includes module initializers, finalizers, metadata functions and
+    /// escaped callbacks. Metadata checks cannot verify native code behavior.
+    pub unsafe fn new<P: AsRef<Path>>(logic_path: P) -> Result<Self, RunnerError> {
+        Self::load_with_policy(
+            logic_path,
+            std::ptr::null_mut(),
+            RuntimeHandle::std(),
+            UnloadPolicy::KeepLoaded,
+        )
     }
 
-    pub fn with_runtime<P: AsRef<Path>>(
+    /// Loads native logic with a blocking runtime adapter.
+    ///
+    /// # Safety
+    /// The DLL and its replacements must satisfy `FlowRunner::new`'s contract.
+    pub unsafe fn with_runtime<P: AsRef<Path>>(
         logic_path: P,
         runtime: RuntimeHandle,
     ) -> Result<Self, RunnerError> {
-        Self::with_context_ptr_and_runtime(logic_path, std::ptr::null_mut(), runtime)
+        Self::load_with_policy(
+            logic_path,
+            std::ptr::null_mut(),
+            runtime,
+            UnloadPolicy::KeepLoaded,
+        )
     }
 
-    pub fn with_context<P: AsRef<Path>, T>(
+    /// Low-level legacy initialization context. Prefer context-free execution.
+    ///
+    /// # Safety
+    /// The context's concrete type and layout must match hot_init in every
+    /// loaded generation. It must remain valid and exclusively accessible for
+    /// every DLL access, including reload, cleanup and escaped callbacks/tasks.
+    /// KeepLoaded retains code, not the context. Failed initialization must also
+    /// obey this contract. No Rust lifetime or runtime type check enforces it.
+    /// The DLL and replacements must also satisfy `FlowRunner::new`'s contract.
+    pub unsafe fn with_context<P: AsRef<Path>, T>(
         logic_path: P,
         context: &mut T,
     ) -> Result<Self, RunnerError> {
@@ -128,7 +177,16 @@ impl FlowRunner {
         )
     }
 
-    pub fn with_context_and_runtime<P: AsRef<Path>, T>(
+    /// Low-level legacy initialization context. Prefer context-free execution.
+    ///
+    /// # Safety
+    /// The context's concrete type and layout must match hot_init in every
+    /// loaded generation. It must remain valid and exclusively accessible for
+    /// every DLL access, including reload, cleanup and escaped callbacks/tasks.
+    /// KeepLoaded retains code, not the context. Failed initialization must also
+    /// obey this contract. No Rust lifetime or runtime type check enforces it.
+    /// The DLL and replacements must also satisfy `FlowRunner::new`'s contract.
+    pub unsafe fn with_context_and_runtime<P: AsRef<Path>, T>(
         logic_path: P,
         context: &mut T,
         runtime: RuntimeHandle,
@@ -136,22 +194,53 @@ impl FlowRunner {
         Self::with_context_ptr_and_runtime(logic_path, context as *mut T as *mut c_void, runtime)
     }
 
-    pub fn with_context_ptr<P: AsRef<Path>>(
+    /// Low-level legacy initialization context. Prefer context-free execution.
+    ///
+    /// # Safety
+    /// The context's concrete type and layout must match hot_init in every
+    /// loaded generation. It must remain valid and exclusively accessible for
+    /// every DLL access, including reload, cleanup and escaped callbacks/tasks.
+    /// KeepLoaded retains code, not the context. Failed initialization must also
+    /// obey this contract. No Rust lifetime or runtime type check enforces it.
+    /// The DLL and replacements must also satisfy `FlowRunner::new`'s contract.
+    pub unsafe fn with_context_ptr<P: AsRef<Path>>(
         logic_path: P,
         context: *mut c_void,
     ) -> Result<Self, RunnerError> {
         Self::with_context_ptr_and_runtime(logic_path, context, RuntimeHandle::std())
     }
 
-    pub fn with_context_ptr_and_runtime<P: AsRef<Path>>(
+    /// Low-level legacy initialization context. Prefer context-free execution.
+    ///
+    /// # Safety
+    /// The context's concrete type and layout must match hot_init in every
+    /// loaded generation. It must remain valid and exclusively accessible for
+    /// every DLL access, including reload, cleanup and escaped callbacks/tasks.
+    /// KeepLoaded retains code, not the context. Failed initialization must also
+    /// obey this contract. No Rust lifetime or runtime type check enforces it.
+    /// The DLL and replacements must also satisfy `FlowRunner::new`'s contract.
+    pub unsafe fn with_context_ptr_and_runtime<P: AsRef<Path>>(
         logic_path: P,
         context: *mut c_void,
         runtime: RuntimeHandle,
     ) -> Result<Self, RunnerError> {
-        let logic_path = logic_path.as_ref().to_path_buf();
+        Self::load_with_policy(logic_path, context, runtime, UnloadPolicy::KeepLoaded)
+    }
+
+    fn load_with_policy<P: AsRef<Path>>(
+        logic_path: P,
+        context: *mut c_void,
+        runtime: RuntimeHandle,
+        unload_policy: UnloadPolicy,
+    ) -> Result<Self, RunnerError> {
+        let logic_path = logic_path.as_ref().canonicalize()?;
         let reload_watcher = start_reload_watcher(&logic_path);
-        let init_context = if context.is_null() { None } else { Some(context) };
-        let loaded = load_library(&logic_path, 0, init_context)?;
+        let init_context = if context.is_null() {
+            None
+        } else {
+            Some(context)
+        };
+        let loaded = load_library(&logic_path, 0, init_context, unload_policy)?;
 
         Ok(Self {
             load_id: 0,
@@ -159,17 +248,43 @@ impl FlowRunner {
             reload_watcher,
             init_context,
             runtime,
-            #[cfg(any(feature = "tokio", feature = "async-std", feature = "smol"))]
-            attached_runtime: None,
+            unload_policy,
         })
+    }
+
+    pub fn unload_policy(&self) -> UnloadPolicy {
+        self.unload_policy
+    }
+
+    /// Changes retirement of the current generation and subsequent loads.
+    /// Already retired KeepLoaded generations remain loaded.
+    ///
+    /// # Safety
+    /// Before collecting WhenIdle generations, the caller must establish that
+    /// independent tasks/threads and external callbacks have stopped and all
+    /// plugin calls have returned. Include data/TLS destructors, initialization,
+    /// and failed candidate loads in this artifact lifetime contract. Wakers
+    /// cloned through the supplied HostWaker ABI are tracked; arbitrary spawn
+    /// is not tracked. Setting this policy never unloads a library by itself.
+    pub unsafe fn set_unload_policy(&mut self, policy: UnloadPolicy) {
+        self.unload_policy = policy;
+        self.loaded
+            .as_mut()
+            .expect("loaded library missing")
+            .image
+            .policy = policy;
     }
 
     pub fn run(&mut self, state: &mut AppState) -> Result<RunStatus, RunnerError> {
         self.run_until_done(state)
     }
 
+    /// Runs synchronous logic once. Async logic must use `run` so its state
+    /// borrow cannot escape into a library-owned pending future.
     pub fn run_once(&mut self, state: &mut AppState) -> Result<RunStatus, RunnerError> {
-        let _metadata = self.metadata_checked()?;
+        if self.metadata_checked()?.func_type == FuncType::Async {
+            return Err(RunnerError::AsyncRequiresRun);
+        }
         let loaded = self.loaded_ref();
         let status = unsafe { (loaded.entry)(state) };
         Ok(status)
@@ -194,7 +309,10 @@ impl FlowRunner {
     }
 
     #[cfg(feature = "smol")]
-    pub fn run_attached_with_smol(&mut self, state: &mut AppState) -> Result<RunStatus, RunnerError> {
+    pub fn run_attached_with_smol(
+        &mut self,
+        state: &mut AppState,
+    ) -> Result<RunStatus, RunnerError> {
         let handle = ();
         self.run_attached_with_adapter::<SmolAdapter>(state, &handle)
     }
@@ -225,46 +343,54 @@ impl FlowRunner {
         if !supported {
             return Err(RunnerError::AttachedUnavailable);
         }
-        if let Some(attach) = attach_runtime {
-            if self.attached_runtime.is_none() {
-                let vtable = A::vtable(handle);
-                self.attached_runtime = Some(Box::new(vtable));
-            }
-            let vtable_ptr = self
-                .attached_runtime
-                .as_ref()
-                .expect("attached runtime missing")
-                .as_ref()
-                as *const _;
-            let ok = unsafe { attach(vtable_ptr) };
-            if !ok {
-                return Err(RunnerError::AttachedAttachFailed);
-            }
-        }
-        let make_future = make_future.ok_or(RunnerError::AttachedUnavailable)?;
-        let attached = A::with_entered(handle, || unsafe { make_future(state) });
-        let task = AttachedFutureTask::new(attached).ok_or(RunnerError::AttachedInvalid)?;
-        let status = A::block_on(handle, task);
-        Ok(status)
+        let attach = attach_runtime.ok_or(RunnerError::AttachedUnavailable)?;
+
+        let vtable = A::vtable(handle);
+        let lease = self.loaded_ref().image.lease();
+        A::with_entered(handle, || {
+            // Drop order: task -> runtime attachment -> table/handle -> library.
+            let _attachment = unsafe { crate::AttachedRuntimeGuard::new(attach, &vtable) }
+                .ok_or(RunnerError::AttachedAttachFailed)?;
+            let attached = unsafe { make_future(state) };
+            // SAFETY: the synchronous call retains the state borrow and loaded
+            // library until block_on has completed or dropped the task on unwind.
+            let task = unsafe { AttachedFutureTask::with_keep_alive(attached, lease) }
+                .ok_or(RunnerError::AttachedInvalid)?;
+            Ok(A::block_on(handle, task))
+        })
     }
 
     pub fn run_until_done(&mut self, state: &mut AppState) -> Result<RunStatus, RunnerError> {
         let metadata = self.metadata_checked()?;
         let loaded = self.loaded_ref();
-
-        match metadata.func_type {
-            FuncType::Sync => {
-                let status = unsafe { (loaded.entry)(state) };
-                Ok(status)
-            }
-            FuncType::Async => loop {
-                let status = unsafe { (loaded.entry)(state) };
-                match status {
-                    RunStatus::Pending => self.runtime.sleep(Duration::from_millis(16)),
-                    _ => return Ok(status),
-                }
-            },
+        unsafe {
+            run_borrowed(
+                metadata.func_type,
+                loaded.entry,
+                loaded.make_future,
+                state,
+                &self.runtime,
+                Some(loaded.image.lease()),
+            )
         }
+    }
+
+    /// Starts an independent execution with owned state. The handle does not
+    /// borrow this runner, so it may finish after reload or runner destruction.
+    /// This path does not attach the legacy host runtime callback table.
+    pub fn start(
+        &mut self,
+        mut state: AppState,
+    ) -> Result<crate::Execution<AppState>, RunnerError> {
+        let metadata = self.metadata_checked()?;
+        let loaded = self.loaded_ref();
+        let lease = loaded.image.lease();
+        if metadata.func_type == FuncType::Sync {
+            let status = unsafe { (loaded.entry)(&mut state) };
+            return Ok(crate::Execution::completed(state, status, lease));
+        }
+        unsafe { crate::Execution::with_generation(state, loaded.make_future, Some(lease)) }
+            .map_err(|_| RunnerError::AttachedInvalid)
     }
 
     pub fn reload_if_needed(&mut self) -> Result<bool, RunnerError> {
@@ -275,17 +401,18 @@ impl FlowRunner {
 
         let source_path = self.loaded_ref().source_path.clone();
         let next_load_id = self.load_id.saturating_add(1);
-        let loaded = load_library(&source_path, next_load_id, self.init_context)?;
-        let current = self.loaded.replace(loaded).expect("FlowRunner loaded library missing");
+        let loaded = load_library(
+            &source_path,
+            next_load_id,
+            self.init_context,
+            self.unload_policy,
+        )?;
+        let current = self
+            .loaded
+            .replace(loaded)
+            .expect("FlowRunner loaded library missing");
 
-        #[cfg(any(feature = "tokio", feature = "async-std", feature = "smol"))]
-        if let Some(reset) = current.reset_attached {
-            unsafe { reset() };
-        }
-
-        let old_copy = current.copy_path.clone();
         drop(current);
-        let _ = std::fs::remove_file(old_copy);
         self.load_id = next_load_id;
         Ok(true)
     }
@@ -305,12 +432,19 @@ impl FlowRunner {
     }
 
     fn loaded_ref(&self) -> &LoadedLib {
-        self.loaded.as_ref().expect("FlowRunner loaded library missing")
+        self.loaded
+            .as_ref()
+            .expect("FlowRunner loaded library missing")
+    }
+}
+
+impl Drop for FlowRunner {
+    fn drop(&mut self) {
+        drop(self.loaded.take());
     }
 }
 
 struct LoadedLib {
-    _lib: Library,
     entry: EntryFn,
     get_type: MetadataFn,
     _init: Option<InitFn>,
@@ -318,13 +452,29 @@ struct LoadedLib {
     attached_supported: Option<AttachedSupportedFn>,
     #[cfg(any(feature = "tokio", feature = "async-std", feature = "smol"))]
     attach_runtime: Option<AttachRuntimeFn>,
-    #[cfg(any(feature = "tokio", feature = "async-std", feature = "smol"))]
-    make_future: Option<MakeAttachedFutureFn>,
-    #[cfg(any(feature = "tokio", feature = "async-std", feature = "smol"))]
+    make_future: MakeAttachedFutureFn,
     reset_attached: Option<ResetAttachedFn>,
     source_path: PathBuf,
     source_mtime: SystemTime,
-    copy_path: PathBuf,
+    image: GenerationOwner,
+}
+
+impl Drop for LoadedLib {
+    fn drop(&mut self) {
+        // Run module cleanup while code is live. Independent executions own
+        // their futures and leases; resetting a module must not destroy them.
+        if let Some(reset) = self.reset_attached {
+            unsafe { reset() };
+        }
+    }
+}
+
+struct LibraryCopy(PathBuf);
+
+impl Drop for LibraryCopy {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
 }
 
 struct ReloadWatcher {
@@ -336,13 +486,16 @@ fn load_library(
     source_path: &Path,
     load_id: u64,
     init_context: Option<*mut c_void>,
+    unload_policy: UnloadPolicy,
 ) -> Result<LoadedLib, RunnerError> {
     let source_mtime = std::fs::metadata(source_path)?.modified()?;
-    let copy_path = copy_library(source_path, load_id)?;
-    let lib = unsafe { Library::new(&copy_path)? };
+    let image = GenerationOwner::open(copy_library(source_path, load_id)?, unload_policy)?;
+    let lib = image.library();
     let get_type: MetadataFn = unsafe { *lib.get(b"hot_type")? };
     let entry: EntryFn = unsafe { *lib.get(b"hot_entry")? };
-    let init = unsafe { lib.get::<InitFn>(b"hot_init") }.ok().map(|sym| *sym);
+    let init = unsafe { lib.get::<InitFn>(b"hot_init") }
+        .ok()
+        .map(|sym| *sym);
     #[cfg(any(feature = "tokio", feature = "async-std", feature = "smol"))]
     let attached_supported = unsafe { lib.get::<AttachedSupportedFn>(b"hot_attached_supported") }
         .ok()
@@ -351,11 +504,7 @@ fn load_library(
     let attach_runtime = unsafe { lib.get::<AttachRuntimeFn>(b"hot_attach_runtime") }
         .ok()
         .map(|sym| *sym);
-    #[cfg(any(feature = "tokio", feature = "async-std", feature = "smol"))]
-    let make_future = unsafe { lib.get::<MakeAttachedFutureFn>(b"hot_make_future") }
-        .ok()
-        .map(|sym| *sym);
-    #[cfg(any(feature = "tokio", feature = "async-std", feature = "smol"))]
+    let make_future: MakeAttachedFutureFn = unsafe { *lib.get(b"hot_make_future")? };
     let reset_attached = unsafe { lib.get::<ResetAttachedFn>(b"hot_reset") }
         .ok()
         .map(|sym| *sym);
@@ -374,7 +523,6 @@ fn load_library(
     }
 
     Ok(LoadedLib {
-        _lib: lib,
         entry,
         get_type,
         _init: init,
@@ -382,18 +530,20 @@ fn load_library(
         attached_supported,
         #[cfg(any(feature = "tokio", feature = "async-std", feature = "smol"))]
         attach_runtime,
-        #[cfg(any(feature = "tokio", feature = "async-std", feature = "smol"))]
         make_future,
-        #[cfg(any(feature = "tokio", feature = "async-std", feature = "smol"))]
         reset_attached,
         source_path: source_path.to_path_buf(),
         source_mtime,
-        copy_path,
+        image,
     })
 }
 
-fn copy_library(source_path: &Path, load_id: u64) -> Result<PathBuf, RunnerError> {
-    let copy_dir = PathBuf::from("target").join("hot");
+fn copy_library(source_path: &Path, load_id: u64) -> Result<LibraryCopy, RunnerError> {
+    // Desktop launchers may start the process in a read-only working directory.
+    // Copies belong to host scratch storage, independent of the source/CWD.
+    let copy_dir = std::env::temp_dir()
+        .join("flow-reloader")
+        .join(std::process::id().to_string());
     std::fs::create_dir_all(&copy_dir)?;
     let ext = source_path
         .extension()
@@ -423,11 +573,12 @@ fn copy_library(source_path: &Path, load_id: u64) -> Result<PathBuf, RunnerError
         sanitized_stem, pid, load_id, nonce, ext
     );
     let dest = copy_dir.join(file_name);
-    std::fs::copy(source_path, &dest)?;
-    Ok(dest)
+    let copy = LibraryCopy(dest);
+    std::fs::copy(source_path, &copy.0)?;
+    Ok(copy)
 }
 
-fn validate_metadata(metadata: Metadata) -> Result<(), RunnerError> {
+pub(crate) fn validate_metadata(metadata: Metadata) -> Result<(), RunnerError> {
     if metadata.abi_version != ABI_VERSION {
         return Err(RunnerError::AbiVersion {
             expected: ABI_VERSION,
@@ -482,13 +633,11 @@ fn reload_requested(watcher: &Option<ReloadWatcher>) -> bool {
 }
 
 fn start_reload_watcher(source_path: &Path) -> Option<ReloadWatcher> {
-    let Some(file_name) = source_path.file_name().map(|name| name.to_os_string()) else {
-        return None;
-    };
+    let file_name = source_path.file_name()?.to_os_string();
     let watch_dir = source_path.parent().unwrap_or_else(|| Path::new("."));
     let (tx, rx) = mpsc::channel();
-    let mut watcher = match notify::recommended_watcher(
-        move |event: Result<notify::Event, notify::Error>| {
+    let mut watcher =
+        match notify::recommended_watcher(move |event: Result<notify::Event, notify::Error>| {
             let Ok(event) = event else {
                 return;
             };
@@ -500,23 +649,30 @@ fn start_reload_watcher(source_path: &Path) -> Option<ReloadWatcher> {
             if !is_target {
                 return;
             }
-            if matches!(event.kind, EventKind::Modify(_) | EventKind::Create(_) | EventKind::Remove(_))
-            {
+            if matches!(
+                event.kind,
+                EventKind::Modify(_) | EventKind::Create(_) | EventKind::Remove(_)
+            ) {
                 let _ = tx.send(());
             }
-        },
-    ) {
-        Ok(watcher) => watcher,
-        Err(err) => {
-            eprintln!("Failed to start file watcher: {err}");
-            return None;
-        }
-    };
+        }) {
+            Ok(watcher) => watcher,
+            Err(err) => {
+                eprintln!("Failed to start file watcher: {err}");
+                return None;
+            }
+        };
 
     if let Err(err) = watcher.watch(watch_dir, RecursiveMode::NonRecursive) {
         eprintln!("Failed to watch {}: {err}", watch_dir.display());
         return None;
     }
 
-    Some(ReloadWatcher { _watcher: watcher, rx })
+    Some(ReloadWatcher {
+        _watcher: watcher,
+        rx,
+    })
 }
+
+#[cfg(test)]
+mod tests;

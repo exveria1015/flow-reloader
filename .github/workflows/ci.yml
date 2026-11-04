@@ -1,0 +1,81 @@
+name: Rust
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  windows-gui:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Rust
+        run: |
+          rustup update stable --no-self-update
+          rustup default stable
+          rustup component add clippy
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Frontend syntax and Tauri lints
+        run: |
+          node --check examples/tauri_tokio/dist/main.js
+          cargo clippy -p tauri_tokio -p tauri_tokio_logic --all-targets -- -D warnings
+      - name: Native GUI backend integration (no window required)
+        run: cargo test -p tauri_tokio --bin tauri_tokio -- --ignored --test-threads=1
+
+  miri:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        model: [Stacked, Tree]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install pinned Miri toolchain
+        run: rustup toolchain install nightly-2026-11-02 --profile minimal --component miri --component rust-src
+      - name: Prepare interpreter sysroot
+        run: cargo +nightly-2026-11-02 miri setup --target x86_64-unknown-linux-gnu
+      - name: Check async ownership and generated entrypoints
+        shell: pwsh
+        run: ./scripts/check-miri.ps1 -Toolchain nightly-2026-11-02 -BorrowModel ${{ matrix.model }}
+      - name: Save diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: miri-${{ matrix.model }}
+          path: target/miri-audit/seed-0/
+
+  check:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Rust
+        run: |
+          rustup update stable --no-self-update
+          rustup default stable
+          rustup component add rustfmt clippy
+      - name: Formatting
+        run: |
+          cargo fmt --all -- --check
+          rustfmt --check flow_reload/tests/fixtures/logic.rs
+          rustfmt --check flow_reload/tests/fixtures/handler.rs
+      - name: Core lints (default features)
+        run: cargo clippy -p interface -p hot_macro -p flow_reload --all-targets -- -D warnings
+      - name: Core lints (all features)
+        run: cargo clippy -p interface -p hot_macro -p flow_reload --all-targets --all-features -- -D warnings
+      - name: Core tests (default features)
+        run: cargo test -p interface -p hot_macro -p flow_reload
+      - name: Workspace tests without the GUI application
+        run: cargo test --workspace --exclude tauri_tokio --all-features
+      - name: Release tests and macro expansion
+        run: cargo test -p interface -p hot_macro -p flow_reload --release --all-features
+      - name: Individual runtime features
+        run: |
+          cargo check -p flow_reload --no-default-features --features tokio
+          cargo check -p flow_reload --no-default-features --features async-std
+          cargo check -p flow_reload --no-default-features --features smol

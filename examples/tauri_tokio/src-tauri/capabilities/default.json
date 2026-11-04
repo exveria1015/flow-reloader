@@ -1,13 +1,10 @@
 {
   "identifier": "default",
   "description": "Default permissions for the Tauri Tokio example",
-  "windows": ["main"],
+  "windows": [
+    "main"
+  ],
   "permissions": [
-    "core:default",
-    "core:event:default",
-    {
-      "identifier": "core:event:allow-listen",
-      "allow": ["hot_state", "hot_reload"]
-    }
+    "core:default"
   ]
 }

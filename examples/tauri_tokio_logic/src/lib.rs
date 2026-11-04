@@ -1,27 +1,95 @@
-use flow_reload::{
-    allocator, reload_direct, spawn_detached_tcp_request, AttachedSleep, AttachedTcpRequest,
-    RunStatus,
-};
+use flow_reload::{RequestContext, ServiceError, ServiceKey};
+use serde::{Deserialize, Serialize};
 
-allocator!();
+// Edit these constants, save, and watch the running window change.
+const LABEL: &str = "Coral / v2";
+const ACCENT: &str = "#c36743";
+const STEP: u64 = 5;
+const INTERVAL_MS: u64 = 600;
 
-#[reload_direct]
-pub async fn update(state: &mut flow_reload::AppState) {
-    state.counter += 1;
-    state.set_message("tauri: Update!");
-    AttachedSleep::new(50).await;
-    let mut out = [0u8; 256];
-    match AttachedTcpRequest::new("127.0.0.1:4001", b"ping", &mut out).await {
-        Ok(len) => {
-            let msg = std::str::from_utf8(&out[4..4 + len]).unwrap_or("<invalid>");
-            state.set_message(&format!("tauri tcp ASDF: {msg}"));
+const VIEW: ServiceKey = ServiceKey::new(0x4755_4901, 1);
+const COUNTER: ServiceKey = ServiceKey::new(0x434f_554e, 1);
+
+#[derive(Deserialize)]
+struct Message {
+    text: String,
+    slow: bool,
+}
+#[derive(Serialize)]
+struct Frame {
+    kind: &'static str,
+    generation: u64,
+    label: &'static str,
+    accent: &'static str,
+    counter: u64,
+    step: u64,
+    text: String,
+    stopped: bool,
+}
+
+fn now(ctx: &RequestContext) -> Result<u64, ServiceError> {
+    let mut out = [0; 8];
+    ctx.call(0, &[], &mut out)?;
+    Ok(u64::from_le_bytes(out))
+}
+async fn pause(ctx: &RequestContext, ms: u64) -> Result<(), ServiceError> {
+    let until = now(ctx)?.saturating_add(ms);
+    std::future::poll_fn(|_| {
+        if ctx.stop_requested() {
+            return std::task::Poll::Ready(Ok(()));
         }
-        Err(RunStatus::Error) => state.set_message("tauri tcp error"),
-        Err(RunStatus::Pending) => state.set_message("tauri tcp pending"),
-        Err(RunStatus::Done) => state.set_message("tauri tcp done"),
+        match now(ctx) {
+            Ok(t) if t >= until => std::task::Poll::Ready(Ok(())),
+            Ok(_) => std::task::Poll::Pending,
+            Err(error) => std::task::Poll::Ready(Err(error)),
+        }
+    })
+    .await
+}
+fn publish(
+    ctx: &RequestContext,
+    kind: &'static str,
+    counter: u64,
+    text: String,
+) -> Result<(), ServiceError> {
+    let bytes = serde_json::to_vec(&Frame {
+        kind,
+        generation: ctx.generation(),
+        label: LABEL,
+        accent: ACCENT,
+        counter,
+        step: STEP,
+        text,
+        stopped: ctx.stop_requested(),
+    })
+    .map_err(|_| ServiceError::FAILED)?;
+    ctx.call(1, &bytes, &mut [])?;
+    Ok(())
+}
+
+#[flow_reload::reload_handler(VIEW, state = COUNTER)]
+async fn update(ctx: RequestContext) -> Result<(), ServiceError> {
+    if ctx.input() == b"worker" {
+        let saved = ctx.checkpoint().ok_or(ServiceError::INVALID_ARGUMENT)?;
+        let mut count = u64::from_le_bytes(
+            saved
+                .bytes
+                .as_slice()
+                .try_into()
+                .map_err(|_| ServiceError::INVALID_ARGUMENT)?,
+        );
+        while !ctx.stop_requested() {
+            count = count.saturating_add(STEP);
+            publish(&ctx, "worker", count, "checkpointed counter".into())?;
+            ctx.save_checkpoint(COUNTER, &count.to_le_bytes())?;
+            pause(&ctx, INTERVAL_MS).await?;
+        }
+        ctx.save_checkpoint(COUNTER, &count.to_le_bytes())?;
+    } else {
+        let message: Message =
+            serde_json::from_slice(ctx.input()).map_err(|_| ServiceError::INVALID_ARGUMENT)?;
+        pause(&ctx, if message.slow { 5000 } else { 150 }).await?;
+        publish(&ctx, "reply", 0, format!("{LABEL} → {}", message.text))?;
     }
-    if !spawn_detached_tcp_request("127.0.0.1:4001", b"fire") {
-        state.set_message("tauri detached tcp unavailable");
-    }
-    state.counter += 1;
+    Ok(())
 }

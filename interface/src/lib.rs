@@ -2,6 +2,8 @@ use std::borrow::Cow;
 use std::ffi::c_void;
 use std::ops::{Deref, DerefMut};
 
+pub mod services;
+
 pub const CARTRIDGE_CAPACITY: usize = 8192;
 
 #[repr(C)]
@@ -100,7 +102,9 @@ impl<T: CartridgeState> State<T> {
 
 impl<T: CartridgeState> Default for State<T> {
     fn default() -> Self {
-        Self { inner: T::default() }
+        Self {
+            inner: T::default(),
+        }
     }
 }
 
@@ -154,7 +158,8 @@ where
     }
 }
 
-pub const ABI_VERSION: u32 = 3;
+// Async execution uses per-task hot_make_future handles, never a TLS entry slot.
+pub const ABI_VERSION: u32 = 4;
 
 #[repr(u8)]
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -205,6 +210,10 @@ pub struct AttachedFutureVTable {
 }
 
 #[repr(C)]
+/// An owned foreign future handle. Ownership is transferred to one caller,
+/// which must invoke `vtable.drop(data)` exactly once while the library is live.
+/// A null data or vtable pointer denotes an invalid handle. Borrowed state and
+/// callback context must remain valid until the foreign future is destroyed.
 pub struct AttachedFuture {
     pub data: *mut c_void,
     pub vtable: *const AttachedFutureVTable,
@@ -224,13 +233,7 @@ pub struct HostRuntimeVTable {
         usize,
     ) -> AttachedFuture,
     pub spawn_sleep_ms: unsafe extern "C" fn(*mut c_void, u64),
-    pub spawn_tcp_request: unsafe extern "C" fn(
-        *mut c_void,
-        *const u8,
-        usize,
-        *const u8,
-        usize,
-    ),
+    pub spawn_tcp_request: unsafe extern "C" fn(*mut c_void, *const u8, usize, *const u8, usize),
 }
 
 pub type AttachedSupportedFn = unsafe extern "C" fn() -> bool;

@@ -5,7 +5,9 @@ use flow_reload::{FlowRunner, RunStatus};
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let logic_path = logic_library_path()?;
     let mut state = flow_reload::AppState::default();
-    let mut runner = FlowRunner::new(&logic_path)?;
+    // SAFETY: this host loads the trusted local SDK logic crate; all rebuilt
+    // replacements must preserve its native ABI and task ownership contracts.
+    let mut runner = unsafe { FlowRunner::new(&logic_path) }?;
     start_echo_server();
 
     loop {
@@ -60,11 +62,8 @@ fn logic_library_path() -> Result<std::path::PathBuf, Box<dyn std::error::Error>
     let manifest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let logic_manifest_dir = manifest_dir.join("..").join("async_std_logic");
     let target_dir = flow_reload::internal::default_target_dir(&logic_manifest_dir);
-    let status = flow_reload::internal::build_logic(
-        "async_std_logic",
-        &logic_manifest_dir,
-        &target_dir,
-    )?;
+    let status =
+        flow_reload::internal::build_logic("async_std_logic", &logic_manifest_dir, &target_dir)?;
     if !status.success() {
         return Err("failed to build async_std_logic".into());
     }
