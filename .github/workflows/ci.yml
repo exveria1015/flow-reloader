@@ -99,6 +99,10 @@ jobs:
           rustup update stable --no-self-update
           rustup default stable
           rustup component add rustfmt clippy
+      - name: Lockfile consistency
+        run: |
+          cargo metadata --format-version 1 > /dev/null
+          git diff --exit-code -- Cargo.lock
       - name: Formatting
         run: |
           cargo fmt --all -- --check
