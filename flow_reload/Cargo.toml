@@ -4,10 +4,13 @@ version = "0.1.0"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+repository.workspace = true
+description = "Message-oriented Rust hot reload with host-owned resources and explicit task lifetimes"
+readme = "README.md"
 
 [dependencies]
-interface = { path = "../interface" }
-hot_macro = { path = "../hot_macro" }
+interface = { version = "=0.1.0", path = "../interface" }
+hot_macro = { version = "=0.1.0", path = "../hot_macro" }
 libloading = { version = "0.8", optional = true }
 notify = { version = "6", optional = true }
 
@@ -25,11 +28,3 @@ dev-tools = ["native", "dep:notify"]
 [[bin]]
 name = "flow-cache"
 required-features = ["native"]
-
-[[example]]
-name = "contracts"
-required-features = ["dev-tools"]
-
-[[example]]
-name = "threaded_io"
-required-features = ["dev-tools"]

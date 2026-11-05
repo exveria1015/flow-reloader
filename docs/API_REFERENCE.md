@@ -153,26 +153,37 @@ refunded, including missing files, failed validation and abandoned candidates.
 Share budget clones across router recreation to retain the count. `used()` and
 `limit()` expose it; this is not a process-wide memory cap.
 
-## Features and low-level task ABI
+## Build configurations
 
 Defaults enable `native` (DLL loading, retention and cache cleanup) and `dev-tools`
 (source watching and Cargo helpers in `flow_reload::development`). Logic crates and
 statically linked hosts should use `default-features = false`. `native` alone does
 not include a file watcher. `flow-cache` requires `native`.
 
+| Configuration | Dependency options | Included features |
+| --- | --- | --- |
+| Development host | Defaults | Native loading, retention, cache cleanup and build/watch helpers |
+| Host with an external builder | `default-features = false, features = ["native"]` | Native loading, retention and cache cleanup |
+| Logic crate or static host | `default-features = false` | Resources, tasks, routing and handler generation |
+
+Features select the loading mode independently of Debug/Release.
+
 `reload_handler` also generates `handler_api() -> HandlerApi` for static linking.
 Pass it to `unsafe RequestRouter::from_api`; the callback lifetime contract still applies.
 The static service example uses the same handler and host resource contracts:
 
 ```sh
-cargo run -p service_host --release --no-default-features --features static-logic
+cargo run -p service_host --release --no-default-features --features static-logic --locked
 ```
+
+## Low-level task ABI
 
 `TaskHandle` / `TaskVTable` describe an owned foreign Future, while `FfiFuture`
 polls and destroys that handle exactly once. Low-level `unsafe FfiFuture::new`
 requires the caller to retain code and borrowed data; use `RequestTask` for routed work.
 `LoadError` reports I/O and library/symbol errors through `RouteError::Load` when
-`native` is enabled. Handler/service/task-control ABI versions are unchanged by
-the Rust type renames. Host and logic must still be rebuilt against the same SDK.
+`native` is enabled. Handler ABI 5, Services ABI 2 and task-control ABI 2 define
+the current boundaries. Build host and logic against the same SDK.
 
-The removed compatibility API has no aliases; see [API consolidation](API_CONSOLIDATION.md).
+See [compatibility and scope](COMPATIBILITY.md) for the runtime contract and
+[changelog](../CHANGELOG.md) for breaking changes.

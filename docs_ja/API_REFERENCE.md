@@ -132,26 +132,36 @@ RouterOptions の既定は共有 GenerationBudget の累積ロード32枠、チ�
 ネイティブ枠はロード前に予約し、ファイル不存在・検査失敗・破棄候補も返却しません。
 Router 再作成時も同じ予算を共有でき、used()・limit() で確認します。プロセス全体のメモリ上限ではありません。
 
-## feature と低水準タスク ABI
+## ビルド構成
 
 既定で `native` と `dev-tools` を有効にします。`native` は DLL ロード・保持量観測・コピー掃除、
 `dev-tools` は `flow_reload::development` のソース監視・Cargo ビルド補助を提供します。
 `native` だけを指定した構成には監視機能を含めません。`flow-cache` は `native` が必要です。
 ロジック crate と静的リンクのホストでは `default-features = false` を指定してください。
 
+| 構成 | 依存の指定 | 含まれる機能 |
+| --- | --- | --- |
+| 開発ホスト | 既定 feature | DLL ロード・保持量観測・コピー掃除、ビルド・監視補助 |
+| 外部で成果物をビルドするホスト | `default-features = false, features = ["native"]` | DLL ロード・保持量観測・コピー掃除 |
+| ロジック crate・静的ホスト | `default-features = false` | サービス・タスク・ルーティング・ハンドラー生成 |
+
+ロード方式と Debug／Release は独立しています。
+
 `reload_handler` は静的リンク用の `handler_api() -> HandlerApi` も生成します。
 これを `unsafe RequestRouter::from_api` へ渡します。呼び出し元はコールバックの寿命を保証します。
 同じロジックとホスト資源の契約を使う静的サンプルは次のコマンドで実行できます。
 
 ```sh
-cargo run -p service_host --release --no-default-features --features static-logic
+cargo run -p service_host --release --no-default-features --features static-logic --locked
 ```
+
+## 低水準タスク ABI
 
 `TaskHandle` / `TaskVTable` は所有する外国側 Future、`FfiFuture` はその poll と一度だけの破棄を扱います。
 低水準の `unsafe FfiFuture::new` ではコードと借用先の寿命を呼び出し元が保証します。
 通常の受付処理には世代と終了待ちを管理する `RequestTask` を使ってください。
 `native` 有効時は、I/O・ライブラリ・シンボル取得の失敗を `LoadError` と `RouteError::Load` で返します。
-Rust の型名を整理しただけなので、Handler／Services／タスク制御の ABI 版は変えていません。
-引き続きホストとロジックを同じ SDK でビルドしてください。
+現在の境界は Handler ABI 5、Services ABI 2、タスク制御 ABI 2 です。
+ホストとロジックを同じ SDK でビルドしてください。
 
-削除した互換 API と移行先は [API の一本化](API_CONSOLIDATION.md) を参照してください。
+実行時の契約は [互換性と対象範囲](COMPATIBILITY.md)、API の変更点は [変更履歴](../CHANGELOG.md) を参照してください。

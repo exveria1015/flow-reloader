@@ -1,50 +1,51 @@
 # flow-reloader
 
 Hot-reload trusted Rust logic while keeping the host process, connections and UI alive.
-The current target is reliable **development-time** updates for servers, games and desktop applications.
+Built for **local development** of servers, games and desktop applications.
 
-The recommended API is message-oriented: the host owns resources and admission;
-logic runs in generation-bound tasks. Choose **Drain** to finish existing work on old
-code, or **Restart** to stop registered workers cooperatively and recreate them from
-versioned checkpoints. Arbitrary Future stacks and external I/O effects are not migrated.
+The host owns resources and admission; message handlers run in generation-bound
+tasks. Choose **Drain** to finish existing work on old code, or **Restart** to stop
+registered workers cooperatively and recreate them from versioned checkpoints.
 
-## Try it
+[English docs](docs/README.md) · [日本語ドキュメント](docs_ja/README.md) ·
+[Examples](examples/README.md) · [Changelog](CHANGELOG.md)
 
-Run commands from the workspace root with Rust 1.95+ (Bevy: 1.97.1+) and Cargo installed:
+**Pre-release:** the Rust API may change. Host and logic must use the same SDK.
+See [compatibility and scope](docs/COMPATIBILITY.md) for compiler requirements,
+platform coverage and application responsibilities.
+
+## Quick start
+
+From the workspace root with Rust 1.95+ and Cargo installed:
 
 ```sh
-cargo run -p service_host
-cargo run -p flow_reload --example restart
-cargo run -p flow_reload --example threaded_io
-cargo run -p flow_reload --example contracts
-cargo run -p db_migration_host
-cargo run -p bevy_game_host -- --verify
-cargo run -p tauri_tokio
+cargo run -p service_host --locked
 ```
 
-Run one example at a time:
+Connect a TCP client to `127.0.0.1:4000` and send newline-terminated text. Edit
+`examples/service_logic/src/lib.rs`, save, then send another message on the same
+connection. The host keeps the connection; new requests use the rebuilt logic.
+See [getting started](docs/GETTING_STARTED.md) / [導入手順](docs_ja/GETTING_STARTED.md)
+for the host/logic split.
 
-- `service_host`: send newline-terminated text to `127.0.0.1:4000`, edit
-  `examples/service_logic/src/lib.rs`, then send another message on the same connection.
-  Transport stays in the host; new requests use the new generation.
-- `restart`: a small static example of cooperative shutdown, checkpoint migration and load budgets.
-- `threaded_io`: two logic owner threads, two actual DLL generations and TCP I/O
-  on a bounded host worker; exits after verification. [Contracts](docs_ja/ASYNC_SERVICES_AND_THREADS.md).
-- `contracts`: native DLLs declaring multiple required services and typed initial
-  configuration; rejects missing contracts and malformed data before request execution.
-  [Contracts and scope](docs_ja/SERVICE_CONTRACTS_AND_INIT.md).
-- `db_migration_host`: real DLLs, compatible Drain and a breaking SQLite/host-cache
-  migration after worker shutdown; verifies rollback, retry and durable reopen.
-  Requires a C compiler for bundled SQLite. [Policy and recovery](docs_ja/HOST_RESOURCE_MIGRATION.md).
-- `bevy_game_host --verify`: a headless Bevy 0.20.1 game with real DLLs, frame-boundary
-  cutover, multi-frame worker Restart and stale job rejection (Rust 1.97.1+).
-  Without arguments, edit its logic's `STEP` to build in the background and Restart.
-- `tauri_tokio`: a Tauri GUI with an in-window Rust editor, Drain/Restart controls,
-  counter and build diagnostics. Requires the platform's Tauri build prerequisites;
-  no npm or Tauri CLI is needed. The package name is historical; its logic uses the message API.
+## Examples
 
-See [all examples](examples/README.md), [English documentation](docs/README.md),
-or [日本語ドキュメント](docs_ja/README.md).
+Run one example at a time. Commands use the workspace's committed lockfile.
+
+| Example | Command | Demonstrates |
+| --- | --- | --- |
+| TCP service | `cargo run -p service_host --locked` | Host-owned connections and Drain at message boundaries |
+| Restart | `cargo run -p flow_reload --example restart --locked` | Cooperative shutdown, checkpoint migration and load budgets |
+| Managed children | `cargo run -p flow_reload --example managed_children --locked` | Registered child cleanup before cutover |
+| Threaded I/O | `cargo run -p threaded_io_host --locked` | Two DLL generations, two logic owner threads and bounded host TCP I/O |
+| Service contracts | `cargo run -p contracts_host --locked` | Required services and typed initial configuration |
+| SQLite migration | `cargo run -p db_migration_host --locked` | Resource migration, rollback, retry and durable reopen; needs a C compiler |
+| Bevy game | `cargo run -p bevy_game_host --locked -- --verify` | Headless frame cutover, worker Restart and stale result rejection; Rust 1.97.1+ |
+| Tauri GUI | `cargo run -p tauri_tokio --locked` | In-window Rust editor, Drain/Restart and build diagnostics; needs platform Tauri prerequisites |
+
+The [example guide](examples/README.md) explains prerequisites, source files and
+interactive modes. The GUI uses handwritten HTML/CSS/JavaScript; npm and the Tauri
+CLI are not required.
 
 ## Contracts and limits
 
@@ -72,7 +73,7 @@ or [日本語ドキュメント](docs_ja/README.md).
   budget too; completion does not refund it. Restart the development process when exhausted.
 - DLL copies live under `flow-reloader/managed-v1/sessions/<SessionId>/copies/`
   in the user's temporary directory. `retention_snapshot()` reports SDK-held images;
-  `cargo run -p flow_reload --bin flow-cache -- inspect` reports copy files.
+  `cargo run -p flow_reload --bin flow-cache --locked -- inspect` reports copy files.
   `clean --apply` removes eligible exited sessions; legacy PID directories are listed only.
   See [operations and limits](docs_ja/RETENTION_AND_CLEANUP.md).
 
@@ -82,14 +83,14 @@ The public API is `reload_handler` + `HostResources` + `RequestRouter` in both m
 The generated `handler_api()` table also supports statically linked logic:
 
 ```sh
-cargo run -p service_host --release --no-default-features --features static-logic
+cargo run -p service_host --release --no-default-features --features static-logic --locked
 ```
 
 `flow_reload` defaults to `native` and `dev-tools`. Use `default-features = false`
 in logic crates and static hosts to remove the DLL loader, watcher and cache OS
 dependencies. Build mode is selected explicitly through features, independently
-of Debug/Release. [API consolidation](docs/API_CONSOLIDATION.md) records the
-removed pre-release compatibility API and its replacements.
+of Debug/Release. See [build configurations](docs/API_REFERENCE.md#build-configurations)
+for the feature matrix and [changelog](CHANGELOG.md) for breaking API changes.
 
 ## Workspace
 
@@ -108,16 +109,19 @@ remain explicit workspace targets.
 
 ```sh
 cargo fmt --all -- --check
-cargo clippy -p interface -p hot_macro -p flow_reload --all-targets --all-features -- -D warnings
+cargo clippy -p interface -p hot_macro -p flow_reload --all-targets --all-features --locked -- -D warnings
 cargo test -p flow_reload --no-default-features --locked
 cargo test -p service_host --no-default-features --features static-logic --locked
 cargo test --workspace --exclude tauri_tokio --all-features --locked
-cargo test -p interface -p hot_macro -p flow_reload --release --all-features
+cargo test -p interface -p hot_macro -p flow_reload --release --all-features --locked
 ```
 
 See [testing and scope](docs/TESTING.md) for native DLL fixtures, the GUI backend
 test, Miri setup and CI coverage. Miri, native DLL tests and interactive GUI checks
 cover different behavior; none establishes safety for arbitrary plugins.
+
+See [contributing](CONTRIBUTING.md) for source layout, documentation conventions
+and the checks to run before proposing a change.
 
 ## License
 

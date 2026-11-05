@@ -9,7 +9,7 @@ Bevy **0.20.1** の `App` / `MinimalPlugins` / ECS を使い、1体の Actor の
 リポジトリのルートで実行します。Cargo / rustc が PATH に必要です。
 
 ```powershell
-cargo run -p bevy_game_host -- --verify
+cargo run -p bevy_game_host --locked -- --verify
 ```
 
 速度1と速度3のロジックを別々にビルドし、有限フレームで検証して終了します。
@@ -18,14 +18,14 @@ cargo run -p bevy_game_host -- --verify
 手動編集後にこの検証を行う場合は、その定数を元へ戻してください。
 
 ```powershell
-cargo test -p bevy_game_host --test native_game -- --ignored --test-threads=1 --nocapture
+cargo test -p bevy_game_host --test native_game --locked -- --ignored --test-threads=1 --nocapture
 ```
 
 開発時の連続実行は次です。約60フレーム/秒で動き、60フレームごとに状態を出力します。
 通常ジョブも60フレームごとに発行し、30フレーム後に返すようにしています。
 
 ```powershell
-cargo run -p bevy_game_host
+cargo run -p bevy_game_host --locked
 ```
 
 `examples/bevy_game_logic/src/lib.rs` の `STEP` の値を変更して保存すると、Cargo を
@@ -95,9 +95,9 @@ Drain 後も旧ジョブは完了できますが、結果は旧世代として�
 後処理失敗などで Restart が失敗した場合、受付を停止したままにするコアの契約に従い、
 この最小ホストではエラーを表示します。一般的な復旧 UI は実装していません。
 
-## 確認した範囲
+## 検証範囲
 
-2026-11-05、Windows / Rust 1.99.1 で次を実行しました。
+`native_game` の統合テストは、描画なしで次を検査します。
 
 - 別々に生成した速度1・速度3の実 DLL をロード。
 - prepare では変化せず、3フレーム目の境界で Drain を適用。
@@ -110,8 +110,6 @@ Drain 後も旧ジョブは完了できますが、結果は旧世代として�
 - 最後のワーカーの明示停止・完了、ホストとサービスの所有スレッド上での破棄。
 - 通常の `App::run` でも120フレームまで実行し、常駐ワーカーと定期ジョブの結果が位置へ適用されること。
 
-2026-11-06 の [CI](https://github.com/exveria1015/flow-reloader/actions/runs/42104208459) でも、
-同じ描画なしの統合が Windows / Linux ともに成功しました。描画・入力・GPU 資源・物理エンジン、
-外部コールバックや管理外の子タスクの停止は、この検証に含めていません。
+描画・入力・GPU 資源・物理エンジン、外部コールバックや管理外の子タスクの停止は、この検証に含めません。
 性能測定や一般的なゲーム統合の完成を示すものでもありません。
 生成した DLL は通常の KeepLoaded と累積ロード予算の契約に従います。

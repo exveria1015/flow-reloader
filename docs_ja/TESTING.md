@@ -14,15 +14,32 @@
 | `managed_activities` | 明示登録、子の遅延終了、解除失敗、Drop 後の終了待ち、上限、panic と再試行 |
 | `async_services` | 入出力コピー・サイズと枠の上限、キャンセル終了待ち、失効、操作 ID、バッファ不足での結果保持 |
 | `threaded_services` | FIFO・容量・通知・shutdown／join、2本のロジック所有スレッド、実 TCP と読み取り中キャンセル |
-| `native_threaded_io`（ignored） | 実 SDK DLL 2世代、2本のロジックスレッド、ホスト所有の TCP I/O、Drain と所有スレッドでの破棄 |
+| `threaded_io_host` の `native_threaded_io`（ignored） | 実 SDK DLL 2世代、2本のロジックスレッド、ホスト所有の TCP I/O、Drain と所有スレッドでの破棄 |
 | `service_contracts` | 複数要求・明示割り当て、初期化スキーマ・形式・panic拒否、失効の再検査、世代間の設定保持 |
-| `native_contracts`（ignored） | 実 SDK DLL 2世代のサービス不足・版違い・初期化形式拒否、同期／非同期の複数サービス利用 |
+| `contracts_host` の `native_contracts`（ignored） | 実 SDK DLL 2世代のサービス不足・版違い・初期化形式拒否、同期／非同期の複数サービス利用 |
 | `native_routing` | 実 DLL と同じ TCP 接続、チェックポイント形式変更、別スレッドのコールバック帰還・join・解除失敗、旧 ABI 拒否 |
 | Bevy `native_game` の ignored テスト | 実 DLL と Bevy ECS、フレーム境界、遅延停止・復元、旧世代・Entity・入力版の結果検査、所有スレッド |
 | Tauri `engine` の ignored テスト | 独立プロジェクトの実 DLL ビルド、Drain／Restart、値の継続、構文エラー復帰、作業ディレクトリから独立したコピー |
 
-`fixtures/handler.rs` は proc macro に依存しない独立した ABI 実装です。
+`fixtures/handler.rs` は同梱の固定 ABI 定義 `abi_v5.rs` を使い、SDK や proc macro に依存しない独立した実装です。
 マクロ生成側とローダー側が同じ誤りを共有しても検出できるように残しています。
+
+## 配布物と文書の検査
+
+```powershell
+python scripts/check-docs.py
+./scripts/check-packages.ps1
+```
+
+依存を取得済みなら、配布物の検査に `-Offline` を指定できます。
+スクリプトは SDK の3 crate をパッケージ化し、展開したアーカイブだけで別ワークスペースを作ります。
+全ターゲットのネイティブ・静的構成、独立した ABI DLL、静的リンクの利用側プログラムを検査します。
+未公開の内部依存は patch で展開済み crate に解決し、元のソースツリーは参照しません。
+各アーカイブに README とライセンス本文が必要です。結果とアーカイブのハッシュは
+`target/package-checks/` に残します。レジストリへの公開や crate 名の予約は行いません。
+
+文書の検査は相対リンクのファイル・見出しを確認し、公開文書からローカル作業資料へのリンクを拒否します。
+どちらの検査も Windows・Linux CI に設定しています。
 
 ## 通常の確認
 
@@ -30,19 +47,19 @@
 
 ```powershell
 cargo fmt --all -- --check
-rustfmt --check flow_reload/tests/fixtures/handler.rs
-cargo clippy -p interface -p hot_macro -p flow_reload --all-targets -- -D warnings
-cargo clippy -p interface -p hot_macro -p flow_reload --all-targets --all-features -- -D warnings
-cargo test -p interface -p hot_macro -p flow_reload
-cargo test --workspace --exclude tauri_tokio --all-features
-cargo test -p interface -p hot_macro -p flow_reload --release --all-features
+rustfmt --check flow_reload/tests/fixtures/handler.rs flow_reload/tests/fixtures/abi_v5.rs
+cargo clippy -p interface -p hot_macro -p flow_reload --all-targets --locked -- -D warnings
+cargo clippy -p interface -p hot_macro -p flow_reload --all-targets --all-features --locked -- -D warnings
+cargo test -p interface -p hot_macro -p flow_reload --locked
+cargo test --workspace --exclude tauri_tokio --all-features --locked
+cargo test -p interface -p hot_macro -p flow_reload --release --all-features --locked
 ```
 
 GUI のバックエンドとフロントエンド構文は別に確認します。テストは通常の GUI ソースを編集せず、ウィンドウも開きません。
 
 ```powershell
-cargo clippy -p tauri_tokio -p tauri_tokio_logic --all-targets -- -D warnings
-cargo test -p tauri_tokio --bin tauri_tokio -- --ignored --test-threads=1
+cargo clippy -p tauri_tokio -p tauri_tokio_logic --all-targets --locked -- -D warnings
+cargo test -p tauri_tokio --bin tauri_tokio --locked -- --ignored --test-threads=1
 node --check examples/tauri_tokio/dist/main.js
 ```
 
@@ -54,16 +71,16 @@ ignored 統合テストは一時的にテストプロセスの作業ディレク
 Bevy のネイティブ統合は描画なしで別途確認します。詳しくは [ゲームへの最小適用](BEVY_GAME.md)。
 
 ```powershell
-cargo clippy -p bevy_game_host -p bevy_game_logic -p bevy_game_protocol --all-targets --all-features -- -D warnings
-cargo test -p bevy_game_host --test native_game -- --ignored --test-threads=1
+cargo clippy -p bevy_game_host -p bevy_game_logic -p bevy_game_protocol --all-targets --all-features --locked -- -D warnings
+cargo test -p bevy_game_host --test native_game --locked -- --ignored --test-threads=1
 ```
 
 ## ホスト資源・SQLite の移行
 
 ```powershell
-cargo clippy -p db_migration_host -p db_migration_logic --all-targets --all-features -- -D warnings
-cargo test -p db_migration_host --test database
-cargo test -p db_migration_host --test native_migration -- --ignored --test-threads=1
+cargo clippy -p db_migration_host -p db_migration_logic --all-targets --all-features --locked -- -D warnings
+cargo test -p db_migration_host --test database --locked
+cargo test -p db_migration_host --test native_migration --locked -- --ignored --test-threads=1
 ```
 
 この例だけが rusqlite と bundled SQLite に依存し、C コンパイラが必要です。
@@ -73,10 +90,10 @@ DB は `target/` 内に新規作成し、既存アプリの DB は使用しま�
 ## 保持量とコピーの掃除
 
 ```powershell
-cargo test -p flow_reload --test cache_lifecycle -- --test-threads=1
+cargo test -p flow_reload --test cache_lifecycle --locked -- --test-threads=1
 ```
 
-`target/cache-lifecycle-tests/` 内の独立したルートで、ホスト子プロセスと実 CLI を動かします。
+`target/tmp/cache-lifecycle-tests/` 内の独立したルートで、ホスト子プロセスと実 CLI を動かします。
 利用者の既定コピー領域を apply するテストではありません。
 ignored の2関数は親テストからだけ呼ぶ子プロセスの入口です。
 共通の終了・排他・掃除に加え、Windows では削除拒否・junction、Unix では symlink・共有書き込み可能なルートの拒否を検査します。
@@ -104,8 +121,9 @@ DLL・ネットワークを使うテストを Miri が代替するわけでは�
 
 ## 検証範囲
 
-今回の API 整理後は、Windows／Linux CI と Miri 両モデルを改めて確認します。
-整理前の CI 結果は [初期版の検証記録](archive/INITIAL_MILESTONE.md) に残しています。
+CI には Windows／Linux のコア・ネイティブ統合、コアの最小 Rust バージョン、
+Miri 両借用モデル、Windows／Linux GUI バックエンドを設定しています。
+結果は対象ソースの版と対応させて確認してください。[ワークフロー](../.github/workflows/ci.yml) も参照できます。
 Windows ローカルの成功を Linux や実 GUI の確認結果として扱いません。
 
 ## 静的構成と native 単独構成
@@ -115,7 +133,7 @@ cargo clippy -p flow_reload --all-targets --no-default-features --locked -- -D w
 cargo test -p flow_reload --no-default-features --locked
 cargo check -p flow_reload --no-default-features --features native --locked
 cargo test -p service_host --release --no-default-features --features static-logic --locked
-cargo tree -p service_host --no-default-features --features static-logic --edges normal
+cargo tree -p service_host --no-default-features --features static-logic --edges normal --locked
 ```
 
 静的構成の依存ツリーに libloading・notify・旧ランタイムアダプターが含まれないことを確認します。

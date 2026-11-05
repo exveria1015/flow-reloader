@@ -161,13 +161,19 @@ fn previous_handler_abi_is_rejected_before_accessing_services_extension() {
 fn version_four_header_is_rejected_without_reading_extended_manifest() {
     let fixture = Fixture::new();
     let library = fixture.build("old_header_only", &["header_only_v4"]);
-    assert!(matches!(
-        unsafe { RequestRouter::load(library, HostResources::new()) },
-        Err(RouteError::Abi {
-            version: 4,
-            size: 8
-        })
-    ));
+    let error = unsafe { RequestRouter::load(library, HostResources::new()) }
+        .err()
+        .expect("legacy ABI must be rejected");
+    assert!(
+        matches!(
+            error,
+            RouteError::Abi {
+                version: 4,
+                size: 8
+            }
+        ),
+        "unexpected legacy-ABI error: {error:?}"
+    );
 }
 
 struct Fixture(PathBuf);
@@ -202,10 +208,6 @@ impl Fixture {
                 name,
             ])
             .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/handler.rs"))
-            .env(
-                "FLOW_RELOAD_INTERFACE_SOURCE",
-                Path::new(env!("CARGO_MANIFEST_DIR")).join("../interface/src/lib.rs"),
-            )
             .arg("-o")
             .arg(&path);
         for flag in flags {

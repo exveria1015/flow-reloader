@@ -5,7 +5,7 @@
 リポジトリのルートで実行します。
 
 ```powershell
-cargo run -p service_host
+cargo run -p service_host --locked
 ```
 
 TCP クライアントで `127.0.0.1:4000` へ接続し、改行付きのテキストを送ります。
@@ -15,7 +15,7 @@ TCP クライアントで `127.0.0.1:4000` へ接続し、改行付きのテキ�
 
 単一接続の小さな例です。ビルドは同期処理で、入力待ち中の変更は次のメッセージ境界で反映します。
 画面内で編集する場合は [Tauri GUI Lab](TAURI_GUI_LAB.md)、
-停止・移行の最小例は `cargo run -p flow_reload --example restart` を使ってください。
+停止・移行の最小例は `cargo run -p flow_reload --example restart --locked` を使ってください。
 
 ## 新しいアプリケーションへ組み込む
 
@@ -71,4 +71,4 @@ async fn handle(ctx: RequestContext) -> Result<(), ServiceError> {
 詳細は [ホスト資源と受付](HOST_RESOURCES_AND_ROUTING.md)、
 [Restart と移行](RESTART_AND_MIGRATION.md) を参照してください。
 
-静的リンクと feature の選択は [API の一本化](API_CONSOLIDATION.md) を参照してください。
+静的リンクと feature の選択は [ビルド構成](API_REFERENCE.md#ビルド構成) を参照してください。

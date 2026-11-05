@@ -32,9 +32,9 @@ println!("attempts={}/{}", router.options().generations.used(),
 リポジトリのルートで実行します。
 
 ```powershell
-cargo run -p flow_reload --bin flow-cache -- inspect
-cargo run -p flow_reload --bin flow-cache -- clean
-cargo run -p flow_reload --bin flow-cache -- clean --apply
+cargo run -p flow_reload --bin flow-cache --locked -- inspect
+cargo run -p flow_reload --bin flow-cache --locked -- clean
+cargo run -p flow_reload --bin flow-cache --locked -- clean --apply
 ```
 
 `inspect` と `--apply` のない `clean` は読み取りだけです。欠けた管理ファイルを作成せず、削除もしません。
@@ -47,8 +47,8 @@ CLI／API では `--root`／`CacheOptions::root` で同じルートを指定し�
 相対パス、`..`、リンク・junction 等を経由するルートは拒否します。
 
 ```powershell
-cargo run -p flow_reload --bin flow-cache -- inspect --root C:\scratch\flow-cache
-cargo run -p flow_reload --bin flow-cache -- clean --apply --max-sessions 100 --max-entries 10000
+cargo run -p flow_reload --bin flow-cache --locked -- inspect --root C:\scratch\flow-cache
+cargo run -p flow_reload --bin flow-cache --locked -- clean --apply --max-sessions 100 --max-entries 10000
 ```
 
 既定上限はセッション1024件、ディレクトリ項目65536件です。未知・旧形式の走査も項目上限に含めます。
@@ -103,10 +103,10 @@ Windows の [DACL 設定 API](https://learn.microsoft.com/en-us/windows/win32/ap
 ## 検証
 
 ```powershell
-cargo test -p flow_reload --test cache_lifecycle -- --test-threads=1
+cargo test -p flow_reload --test cache_lifecycle --locked -- --test-threads=1
 ```
 
-2026-11-06 に Windows で親ホスト・子ホスト・掃除 CLI を別プロセスにして確認しました。
+親ホスト・子ホスト・掃除 CLI を別プロセスにした試験で、次を検査します。
 
 - 実 DLL の現用・同一世代の複数候補・拒否・破棄・退役、静的 API と試行予算の区別。
 - 全 Router の破棄後も生存中は削除せず、正常終了・強制終了後だけ適格になること。
@@ -116,9 +116,7 @@ cargo test -p flow_reload --test cache_lifecycle -- --test-threads=1
 - CLI の既定が読み取りであることと、明示 apply の削除。
 
 純粋な Rust の所有・実行経路は Miri でも回帰確認しますが、ファイルロック・DACL・実 DLL の代替検証にはしません。
-整理前の CI 結果は [初期版の検証記録](archive/INITIAL_MILESTONE.md) に残しています。
-今回の整理後の結果と区別してください。
 ignored の2関数は親から起動する子プロセスの入口です。
 親テスト間のセットアップは内部で直列化し、確認対象のプロセス競合は各試験内で明示的に作っています。
 
-[当初の設計記録](archive/RETENTION_AND_CLEANUP_DESIGN.md) と [検証全体](TESTING.md) も参照してください。
+実行方法と検証全体は [テスト](TESTING.md) を参照してください。

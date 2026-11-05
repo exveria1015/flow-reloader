@@ -1,19 +1,20 @@
 # Examples / サンプル一覧
 
-Run commands from the workspace root. 新規実装では上段のメッセージ API の例を使ってください。
+Run commands from the workspace root. 各サンプルは同じメッセージ API を使います。
+必要環境は [Compatibility](../docs/COMPATIBILITY.md) / [互換性と対象範囲](../docs_ja/COMPATIBILITY.md) を参照してください。
 
-## Message API / 推奨する入口
+## Runnable examples / 実行できるサンプル
 
 | Command | What it demonstrates / 確認するもの |
 | --- | --- |
-| `cargo run -p service_host` | Host-owned TCP connection and Drain at message boundaries / 同じ接続の次の要求を新世代へ |
-| `cargo run -p flow_reload --example restart` | Static worker shutdown, checkpoint schema migration, shared load budget / 停止・移行の最小例 |
-| `cargo run -p flow_reload --example managed_children` | Root return waits for registered child cleanup before Restart / 子の終了待ちと切り替え |
-| `cargo run -p flow_reload --example threaded_io` | Two DLL generations, two logic owners, bounded host I/O and TCP / 非同期サービスと複数スレッド |
-| `cargo run -p flow_reload --example contracts` | Multi-service requirements, typed init validation, generation-owned environments / 複数サービスと型付き初期化 |
-| `cargo run -p db_migration_host` | Real DLLs, SQLite + host cache migration, rollback, retry and durable reopen / ホスト資源・DB の移行 |
-| `cargo run -p tauri_tokio` | Native DLL builds, in-window editor, Drain/Restart, counter and build failure recovery / GUI で編集・復旧 |
-| `cargo run -p bevy_game_host -- --verify` | Headless Bevy 0.20.1, real DLLs, frame cutover, delayed worker Restart and stale job rejection / ゲームへの最小適用 |
+| `cargo run -p service_host --locked` | Host-owned TCP connection and Drain at message boundaries / 同じ接続の次の要求を新世代へ |
+| `cargo run -p flow_reload --example restart --locked` | Static worker shutdown, checkpoint schema migration, shared load budget / 停止・移行の最小例 |
+| `cargo run -p flow_reload --example managed_children --locked` | Root return waits for registered child cleanup before Restart / 子の終了待ちと切り替え |
+| `cargo run -p threaded_io_host --locked` | Two DLL generations, two logic owners, bounded host I/O and TCP / 非同期サービスと複数スレッド |
+| `cargo run -p contracts_host --locked` | Multi-service requirements, typed init validation, generation-owned environments / 複数サービスと型付き初期化 |
+| `cargo run -p db_migration_host --locked` | Real DLLs, SQLite + host cache migration, rollback, retry and durable reopen / ホスト資源・DB の移行 |
+| `cargo run -p tauri_tokio --locked` | Native DLL builds, in-window editor, Drain/Restart, counter and build failure recovery / GUI で編集・復旧 |
+| `cargo run -p bevy_game_host --locked -- --verify` | Headless Bevy 0.20.1, real DLLs, frame cutover, delayed worker Restart and stale job rejection / ゲームへの最小適用 |
 
 - [service_host](service_host/src/main.rs) + [service_logic](service_logic/src/lib.rs):
   one client on `127.0.0.1:4000` (`FLOW_RELOAD_ADDR` overrides it). Send newline-terminated
@@ -30,7 +31,7 @@ Run commands from the workspace root. 新規実装では上段のメッセージ
   Without arguments, run at about 60 frames/s, edit the logic's `STEP` and save to
   build in the background and Restart. No renderer/window required. Only the logic's
   `src/lib.rs` is watched. The host owns ECS; the DLL sends copied messages.
-  [設計・実行手順・検証結果](../docs_ja/BEVY_GAME.md)。
+  [設計・実行手順・検証範囲](../docs_ja/BEVY_GAME.md)。
 - [Tauri guide](../docs/TAURI_GUI_LAB.md) / [日本語](../docs_ja/TAURI_GUI_LAB.md): the historical package name `tauri_tokio`
   is retained as the example package identifier. `tauri_tokio/dist/` contains
   **handwritten UI source**, embedded by Tauri; it is not disposable build output.
@@ -39,7 +40,7 @@ Run commands from the workspace root. 新規実装では上段のメッセージ
 ## Static logic / 静的リンク
 
 ```sh
-cargo run -p service_host --release --no-default-features --features static-logic
+cargo run -p service_host --release --no-default-features --features static-logic --locked
 ```
 
 Uses the same `service_logic` handler and TCP host without a DLL, watcher or build

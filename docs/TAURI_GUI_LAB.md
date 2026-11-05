@@ -9,7 +9,7 @@ message API for both request handling and worker Restart.
 From the workspace root:
 
 ```sh
-cargo run -p tauri_tokio
+cargo run -p tauri_tokio --locked
 ```
 
 Install the platform's Tauri build prerequisites first. Windows also needs
@@ -69,13 +69,15 @@ Logic that never returns from poll cannot be safely interrupted on its own threa
 
 The default load budget is 32 cumulative attempts. Restart the development process
 when exhausted. DLL copies are placed under the user's temporary directory at
-`flow-reloader/<PID>/`; remove retained copies only after that process exits.
+`flow-reloader/managed-v1/sessions/<SessionId>/copies/`.
+Use `flow-cache inspect` to inspect files and `flow-cache clean --apply` to remove
+eligible exited sessions. See [cache operations](../docs_ja/RETENTION_AND_CLEANUP.md).
 
 ## Verify
 
 ```sh
-cargo test -p tauri_tokio --bin tauri_tokio -- --ignored --test-threads=1
-cargo clippy -p tauri_tokio -p tauri_tokio_logic --all-targets -- -D warnings
+cargo test -p tauri_tokio --bin tauri_tokio --locked -- --ignored --test-threads=1
+cargo clippy -p tauri_tokio -p tauri_tokio_logic --all-targets --locked -- -D warnings
 node --check examples/tauri_tokio/dist/main.js
 ```
 

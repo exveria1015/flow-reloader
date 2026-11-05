@@ -1,6 +1,5 @@
-mod protocol;
+use contracts_protocol::*;
 use flow_reload::{RequestContext, ServiceError};
-use protocol::*;
 use std::task::Poll;
 
 #[flow_reload::reload_handler(PRIMARY, requires = REQUIREMENTS, init = Config)]

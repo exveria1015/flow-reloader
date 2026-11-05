@@ -1,6 +1,6 @@
 // Versioned C ABI for message handlers, host services and owned tasks.
-// Each allocation is destroyed by the side that created it. Keep this source
-// include!-compatible for independently compiled native ABI fixtures.
+// Each allocation is destroyed by the side that created it. Independent DLL
+// fixtures carry a frozen ABI snapshot instead of including this source.
 use std::ffi::c_void;
 
 pub mod services;

@@ -17,7 +17,7 @@ fn serial() -> std::sync::MutexGuard<'static, ()> {
 
 fn fixture() -> PathBuf {
     static NEXT: AtomicU64 = AtomicU64::new(1);
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../target/cache-lifecycle-tests");
+    let root = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("cache-lifecycle-tests");
     fs::create_dir_all(&root).unwrap();
     root.canonicalize().unwrap().join(format!(
         "{}-{}-{}",
@@ -47,14 +47,11 @@ fn options(root: &Path) -> CacheOptions {
     }
 }
 fn build(root: &Path, name: &str, source: &str, flags: &[&str]) -> PathBuf {
-    let workspace = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .unwrap()
-        .to_path_buf();
+    let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let path = root.join(development::library_file_name(name));
     let mut command = Command::new("rustc");
     command
-        .arg(workspace.join("flow_reload/tests/fixtures").join(source))
+        .arg(manifest.join("tests/fixtures").join(source))
         .args([
             "--edition=2021",
             "--crate-type=cdylib",
@@ -63,11 +60,7 @@ fn build(root: &Path, name: &str, source: &str, flags: &[&str]) -> PathBuf {
             "-Awarnings",
         ])
         .arg("-o")
-        .arg(&path)
-        .env(
-            "FLOW_RELOAD_INTERFACE_SOURCE",
-            workspace.join("interface/src/lib.rs"),
-        );
+        .arg(&path);
     for flag in flags {
         command.args(["--cfg", flag]);
     }

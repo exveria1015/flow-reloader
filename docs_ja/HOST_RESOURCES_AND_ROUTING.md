@@ -133,7 +133,7 @@ from_api／prepare_api は静的リンク等の拡張口で、呼び出し元が
 ## サンプルと確認結果
 
 ```powershell
-cargo run -p service_host
+cargo run -p service_host --locked
 ```
 
 既定は 127.0.0.1:4000、環境変数 FLOW_RELOAD_ADDR で変更できる。

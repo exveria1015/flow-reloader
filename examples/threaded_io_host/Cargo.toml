@@ -1,0 +1,10 @@
+[package]
+publish = false
+name = "threaded_io_host"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+flow_reload = { path = "../../flow_reload" }

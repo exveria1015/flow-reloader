@@ -1,3 +1,6 @@
 target/
 del/
 examples/tauri_tokio/src-tauri/gen/schemas/
+
+# Local planning, investigation and verification records.
+/contexts/
