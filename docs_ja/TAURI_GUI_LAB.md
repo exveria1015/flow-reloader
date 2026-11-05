@@ -7,7 +7,7 @@
 リポジトリのルートで実行する。
 
 ```powershell
-cargo run -p tauri_tokio
+cargo run -p tauri_tokio --locked
 ```
 
 npm や Tauri CLI は不要。Tauri の Windows ビルド環境と WebView2 が必要。
@@ -63,8 +63,10 @@ ABI・スキーマの検査失敗や停止待ち失敗は別の失敗。Restart 
 実行中のロジックが poll から戻らない場合の強制停止や、任意の実行時 panic からの自動復旧は提供しない。
 
 保持予算は既定32枠。枯渇後はウィンドウを閉じて開発プロセスを再起動する。
-DLL コピー先はユーザー一時領域の `flow-reloader/<PID>/`。起動時の作業ディレクトリが読み取り専用でも使える。
-コピーは終了後も残り得るため、掃除する場合は対応プロセスの終了を確認する。
+DLL コピー先はユーザー一時領域の `flow-reloader/managed-v1/sessions/<SessionId>/copies/`。
+起動時の作業ディレクトリが読み取り専用でも使える。
+`flow-cache inspect` で調べ、終了後の適格なセッションだけを `flow-cache clean --apply` で掃除する。
+詳細は [保持量の観測とコピーの掃除](RETENTION_AND_CLEANUP.md) を参照。
 
 ## 実装
 
@@ -79,20 +81,20 @@ SDK のサービス操作は短い同期処理。時計と表示データをホ�
 ビルドログはロジック用 target ディレクトリ内の `gui-build.log` に保存する。
 Tauri command とグローバル invoke の利用方法は [Tauri 公式ドキュメント](https://v2.tauri.app/develop/calling-rust/) に基づく。
 
-## 検証記録
+## 検証
 
-Windows の実ウィンドウで起動、カウンター更新、画面内の編集例、ソース保存、世代更新を確認した。
-同じホスト PID のまま Drain では worker / gen 1 が継続し、Restart 後に Coral / v2・+5 のワーカーへ切り替わることを確認した。
+実ウィンドウでは、起動、カウンター更新、画面内の編集例、ソース保存、世代更新を確認する。
+同じホスト PID のまま Drain では worker / gen 1 が継続し、Restart 後に Coral / v2・+5 のワーカーへ切り替わることを確かめる。
 
-独立した一時プロジェクトを使うネイティブ統合テストも追加した。
+自動検査には、独立した一時プロジェクトを使うネイティブ統合テストを使う。
 通常の GUI ソースを変更せず、作業ディレクトリ内に target を作れない状況、Drain、Restart、カウンター維持、
 構文エラー中の旧ワーカー継続、修正後の再開、世代予算を確認する。テスト後にエンジンを停止し、一時プロジェクトを掃除する。
 
 ```powershell
-cargo test -p tauri_tokio --bin tauri_tokio -- --ignored --test-threads=1
-cargo clippy -p tauri_tokio -p tauri_tokio_logic --all-targets -- -D warnings
+cargo test -p tauri_tokio --bin tauri_tokio --locked -- --ignored --test-threads=1
+cargo clippy -p tauri_tokio -p tauri_tokio_logic --all-targets --locked -- -D warnings
 node --check examples/tauri_tokio/dist/main.js
 ```
 
-Windows ローカルで統合テストは通過。Windows CI にも同じ検証を設定しているが、リモート CI の実行結果は未確認。
 ヘッドレス統合テストはネイティブ DLL と GUI バックエンドを検証するもので、実ウィンドウの操作確認とは区別する。
+CI の設定と実行方法は [テスト](TESTING.md) を参照。

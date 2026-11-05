@@ -1,4 +1,4 @@
-//! cargo run -p flow_reload --example threaded_io
+//! cargo run -p threaded_io_host --locked
 //! Real DLLs and TCP; two local logic executors share one host-owned I/O thread.
 use flow_reload::*;
 use std::cell::RefCell;
@@ -33,7 +33,7 @@ fn drive<F: Future + Unpin>(mut future: F) -> F::Output {
     }
 }
 fn libraries() -> Result<(PathBuf, PathBuf), Box<dyn std::error::Error>> {
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..");
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let target = root
         .join("target/threaded-io-build")
         .join(std::process::id().to_string());
@@ -45,6 +45,7 @@ fn libraries() -> Result<(PathBuf, PathBuf), Box<dyn std::error::Error>> {
             .current_dir(&root)
             .args([
                 "build",
+                "--locked",
                 "-p",
                 "threaded_io_logic",
                 "--lib",
@@ -227,7 +228,4 @@ pub fn verify() -> Result<(), Box<dyn std::error::Error>> {
     assert!(owners.iter().all(|owner| *owner != io[0]));
     println!("PASS: two logic owners, two real DLL generations, host TCP I/O, bounded queue, owner-thread destruction and worker join");
     Ok(())
-}
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    verify()
 }

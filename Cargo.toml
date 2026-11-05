@@ -6,7 +6,10 @@ members = [
     "examples/service_logic",
     "examples/service_host",
     "examples/threaded_io_logic",
+    "examples/threaded_io_host",
     "examples/contracts_logic",
+    "examples/contracts_host",
+    "examples/contracts_protocol",
     "examples/db_migration_host",
     "examples/db_migration_logic",
     "examples/bevy_game_protocol",
@@ -22,3 +25,4 @@ resolver = "2"
 edition = "2021"
 rust-version = "1.95"
 license = "MIT OR Apache-2.0"
+repository = "https://github.com/exveria1015/flow-reloader"

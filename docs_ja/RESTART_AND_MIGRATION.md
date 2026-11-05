@@ -133,7 +133,7 @@ factory は入力・seed をコピーし、サービスとタスク制御を ret
 実行例:
 
 ```powershell
-cargo run -p flow_reload --example restart
+cargo run -p flow_reload --example restart --locked
 ```
 
 出力は `generation 1: restored 7` → `generation 2: restored 80`。旧値7を停止時に8として保存し、新版の2バイト形式へ移行する。

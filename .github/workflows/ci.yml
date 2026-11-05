@@ -13,7 +13,11 @@ defaults:
 
 jobs:
   msrv:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - name: Install minimum core Rust
@@ -23,10 +27,33 @@ jobs:
           cargo +1.95.0 check -p interface -p hot_macro -p flow_reload --all-targets --all-features --locked
           cargo +1.95.0 check -p flow_reload --all-targets --no-default-features --locked
 
-  windows-gui:
-    runs-on: windows-latest
+  bevy-msrv:
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Install minimum Bevy Rust
+        run: rustup toolchain install 1.97.1 --profile minimal
+      - name: Bevy minimum-version build
+        run: cargo +1.97.1 check -p bevy_game_host -p bevy_game_logic -p bevy_game_protocol --all-targets --all-features --locked
+
+  gui:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Linux Tauri prerequisites
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          if apt-cache show webkitgtk-webdriver > /dev/null 2>&1; then
+            task_webdriver_package=webkitgtk-webdriver
+          else
+            task_webdriver_package=webkit2gtk-driver
+          fi
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential libssl-dev libxdo-dev libayatana-appindicator3-dev librsvg2-dev "$task_webdriver_package" xvfb
       - name: Set up Rust
         run: |
           rustup update stable --no-self-update
@@ -41,6 +68,28 @@ jobs:
           cargo clippy -p tauri_tokio -p tauri_tokio_logic --all-targets --locked -- -D warnings
       - name: Native GUI backend integration (no window required)
         run: cargo test -p tauri_tokio --bin tauri_tokio --locked -- --ignored --test-threads=1
+      - uses: actions/setup-python@v5
+        if: runner.os == 'Linux'
+        with:
+          python-version: '3.x'
+      - name: Build real GUI and WebDriver
+        if: runner.os == 'Linux'
+        run: |
+          cargo build -p tauri_tokio --locked
+          cargo install tauri-driver --version 2.1.0 --locked
+      - name: Real WebView editor, Drain, Restart and recovery
+        if: runner.os == 'Linux'
+        env:
+          LIBGL_ALWAYS_SOFTWARE: '1'
+        run: |
+          xvfb-run -a python scripts/check-gui.py
+          git diff --exit-code -- examples/tauri_tokio_logic/src/lib.rs
+      - name: Save GUI smoke diagnostics
+        if: always() && runner.os == 'Linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: gui-webview-linux
+          path: target/gui-smoke/
 
   miri:
     runs-on: ubuntu-latest
@@ -77,10 +126,22 @@ jobs:
           rustup update stable --no-self-update
           rustup default stable
           rustup component add rustfmt clippy
+      - name: Lockfile consistency
+        run: |
+          cargo metadata --format-version 1 > /dev/null
+          git diff --exit-code -- Cargo.lock
       - name: Formatting
         run: |
           cargo fmt --all -- --check
-          rustfmt --check flow_reload/tests/fixtures/handler.rs
+          rustfmt --check flow_reload/tests/fixtures/handler.rs flow_reload/tests/fixtures/abi_v5.rs
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+      - name: Public documentation links
+        run: python scripts/check-docs.py
+      - name: Extracted SDK packages and consumer
+        shell: pwsh
+        run: ./scripts/check-packages.ps1
       - name: Core lints (default features)
         run: cargo clippy -p interface -p hot_macro -p flow_reload --all-targets --locked -- -D warnings
       - name: Core lints (all features)
@@ -96,11 +157,11 @@ jobs:
       - name: Workspace tests without the GUI application
         run: cargo test --workspace --exclude tauri_tokio --all-features --locked
       - name: Native asynchronous I/O and multiple owner threads
-        run: cargo test -p flow_reload --test native_threaded_io --locked -- --ignored --test-threads=1
+        run: cargo test -p threaded_io_host --test native_threaded_io --locked -- --ignored --test-threads=1
       - name: Native multi-service contracts and typed initialization
         run: |
-          cargo clippy -p contracts_logic --all-targets --all-features --locked -- -D warnings
-          cargo test -p flow_reload --test native_contracts --locked -- --ignored --test-threads=1
+          cargo clippy -p contracts_host -p contracts_logic -p contracts_protocol -p threaded_io_host --all-targets --all-features --locked -- -D warnings
+          cargo test -p contracts_host --test native_contracts --locked -- --ignored --test-threads=1
       - name: Host resource and SQLite migration
         run: |
           cargo clippy -p db_migration_host -p db_migration_logic --all-targets --all-features --locked -- -D warnings

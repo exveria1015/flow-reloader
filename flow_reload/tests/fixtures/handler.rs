@@ -1,7 +1,6 @@
 #![allow(dead_code)]
-mod interface {
-    include!(env!("FLOW_RELOAD_INTERFACE_SOURCE"));
-}
+#[path = "abi_v5.rs"]
+mod interface;
 use interface::services::*;
 use interface::{HostWaker, RunStatus, TaskHandle, TaskVTable};
 use std::ffi::c_void;

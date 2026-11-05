@@ -1,9 +1,6 @@
-//! cargo run -p flow_reload --example contracts
+//! cargo run -p contracts_host --locked
+use contracts_protocol::*;
 use flow_reload::*;
-#[allow(dead_code)]
-#[path = "../../examples/contracts_logic/src/protocol.rs"]
-mod protocol;
-use protocol::*;
 use std::cell::RefCell;
 use std::future::Future;
 use std::path::PathBuf;
@@ -59,7 +56,7 @@ fn environment(counter: ResourceId, formatter: ResourceId, step: u32) -> Handler
         .with_initial(InitData::from_value(&Config { step }).unwrap())
 }
 fn libraries() -> Result<(PathBuf, PathBuf), Box<dyn std::error::Error>> {
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..");
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let target = root
         .join("target/contracts-build")
         .join(std::process::id().to_string());
@@ -71,6 +68,7 @@ fn libraries() -> Result<(PathBuf, PathBuf), Box<dyn std::error::Error>> {
             .current_dir(&root)
             .args([
                 "build",
+                "--locked",
                 "-p",
                 "contracts_logic",
                 "--lib",
@@ -184,7 +182,4 @@ pub fn verify() -> Result<(), Box<dyn std::error::Error>> {
     );
     println!("PASS: two required services, sync/async calls, typed init rejection before execution, old/new DLL environments retained after router drop");
     Ok(())
-}
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    verify()
 }

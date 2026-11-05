@@ -69,7 +69,7 @@ ID・版の照合は信頼済みコード間の契約確認であり、悪意の
 - `encode(&self)`：所有するバイト列を生成。
 - `decode(&[u8])`：形式と値を検査し、所有する Config を復元。
 
-完全な実装は [共有プロトコル](../examples/contracts_logic/src/protocol.rs) にあります。
+完全な実装は [共有プロトコル](../examples/contracts_protocol/src/lib.rs) にあります。
 この例は `CFG1` のマジック、固定長、little-endian の数値、値域1～100を検査します。
 SDK に新しい必須シリアライズ依存は追加していません。
 
@@ -124,9 +124,9 @@ Restart の停止開始後に失効した場合は旧世代を保持し、受付
 ## 実行と検証
 
 ```powershell
-cargo run -p flow_reload --example contracts
-cargo test -p flow_reload --test service_contracts
-cargo test -p flow_reload --test native_contracts -- --ignored --test-threads=1 --nocapture
+cargo run -p contracts_host --locked
+cargo test -p flow_reload --test service_contracts --locked
+cargo test -p contracts_host --test native_contracts --locked -- --ignored --test-threads=1 --nocapture
 ./scripts/check-miri.ps1 -Toolchain nightly-2026-11-02
 ```
 
@@ -137,9 +137,6 @@ cargo test -p flow_reload --test native_contracts -- --ignored --test-threads=1 
 旧／新実行がそれぞれの設定・割り当てで完了することを確認します。
 別のネイティブ fixture では、旧 ABI 4 の短いヘッダーだけを読んで拒否する経路を検査します。
 
-2026-11-05、Windows の実 DLL で確認しました。Miri は DLL を使わない同じ契約・所有・切り替え経路を検査します。
-Stacked / Tree（seed 0）は各12グループが成功し、環境・ソースハッシュ・結果を
-`target/miri-audit/seed-0/` に保存しています。Release、Clippy、ワークスペースのテストと、
-Bevy・Tauri・複数スレッド TCP のネイティブ統合も成功しました。
-2026-11-06 の [CI](https://github.com/exveria1015/flow-reloader/actions/runs/42104208459) では同じ実 DLL の例が Windows／Linux で成功しました。
-任意のデコーダー／サービス実装の正しさまで保証する結果ではありません。
+Miri は DLL を使わない同じ契約・所有・切り替え経路を両借用モデルで検査します。
+実 DLL のネイティブ試験は別途実行します。これらの検査は、任意のデコーダーやサービス実装の正しさまで保証しません。
+実行方法と対象範囲は [テスト](TESTING.md) を参照してください。

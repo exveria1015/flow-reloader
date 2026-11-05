@@ -108,16 +108,16 @@ DB の durable COMMIT と Router のメモリ上の切り替えは、プロセ�
 ## 実行と検証範囲
 
 ```powershell
-cargo run -p db_migration_host
-cargo test -p db_migration_host --test database
-cargo test -p db_migration_host --test native_migration -- --ignored --test-threads=1
+cargo run -p db_migration_host --locked
+cargo test -p db_migration_host --test database --locked
+cargo test -p db_migration_host --test native_migration --locked -- --ignored --test-threads=1
 ```
 
 サンプルは DLL を3種類ビルドし、`target/db-migration-demo/<実行ID>/application.sqlite` を新規作成します。
 既存のアプリ DB は使用しません。出力したファイルは再確認用に残します。
 `db_migration_host` のみに rusqlite 0.41.1（bundled SQLite）を追加したため、C コンパイラも必要です。
 
-2026-11-05 に Windows で次を確認しました。
+ネイティブ試験は次を検査します。
 
 - 実 DLL で互換 Drain 中の旧新要求、非互換 Restart の停止待ち、失敗後の再試行とワーカー状態の継続。
 - 列変更直後・データ変更後・COMMIT 直前の障害と panic に対する rollback、キャッシュ保持。
@@ -127,6 +127,5 @@ cargo test -p db_migration_host --test native_migration -- --ignored --test-thre
 
 コアの `host_commit` はフックの順序・一回性・未呼び出し・失敗／panic を検証します。
 Miri の対象はこのコア部分です。SQLite の C コード・ファイル I/O・実 DLL はネイティブテストで分けて確認します。
-2026-11-06 の [CI](https://github.com/exveria1015/flow-reloader/actions/runs/42104208459) で、同じ SQLite と実 DLL の例は Windows／Linux ともに成功しました。
 強制終了やディスク障害の注入、他 DB、分散トランザクション、
-長時間の非同期移行、フレーム時間の保証はこの結果に含みません。
+長時間の非同期移行、フレーム時間の保証はこの検証に含みません。

@@ -1,12 +1,12 @@
 # flow-reloader ドキュメント
 
 ホストを動かしたまま Rust ロジックを差し替える開発用のホットリローダーです。
-主な利用先はサーバー・常駐処理、ゲーム、デスクトップの順に想定しています。
-新規実装は `HostResources` / `RequestRouter` / `reload_handler` を入口にしてください。
+サーバー・常駐処理、ゲーム、デスクトップへの組み込みを想定しています。
+入口は `HostResources` / `RequestRouter` / `reload_handler` を入口にしてください。
 
 既存処理を旧コードで続ける **Drain** と、登録ワーカーを協調停止して
 チェックポイントから再生成する **Restart** を選べます。
-任意の Future の途中状態や外部 I/O の副作用を自動で移行するものではありません。
+対応環境とアプリケーションの責任範囲は [互換性と対象範囲](COMPATIBILITY.md) にまとめています。
 
 ## 使い始める
 
@@ -14,9 +14,8 @@
 - [サンプル一覧](../examples/README.md): 接続維持、Restart、GUI と静的リンクの例。
 - [Tauri GUI Lab](TAURI_GUI_LAB.md): 画面内で Rust を編集し、切り替えと失敗復旧を試す。
 - [Bevy ゲームへの最小適用](BEVY_GAME.md): 実 DLL、フレーム境界、旧結果の破棄、複数フレームの Restart。
-- [API リファレンス](API_REFERENCE.md): 現行 API、ABI、feature の使い分け。
-
-- [API の一本化](API_CONSOLIDATION.md): 削除した API、静的構成、依存関係とワークスペース。
+- [API リファレンス](API_REFERENCE.md): 現行 API、ABI、ビルド構成。
+- [互換性と対象範囲](COMPATIBILITY.md): 必要環境、対応範囲、アプリケーションの責任。
 
 ## 設計と運用
 
@@ -30,14 +29,14 @@
 - [開発時の運用](DEVELOPMENT.md): ビルド、復旧、DLL コピーの扱い。
 - [保持量の観測と掃除](RETENTION_AND_CLEANUP.md): DLL 参照の観測、セッション管理、終了後のコピー掃除。
 - [トラブルシューティング](TROUBLESHOOTING.md): エラー別の確認点。
-- [残る課題](REMAINING_WORK.md): 現在の未実装・未検証事項と完了条件。
 
 ## 寿命と検証
 
 - [所有・借用・破棄順序](LIFETIME_REVIEW.md): 実行と状態・世代の関係。
 - [DLL と管理外タスク](UNLOAD_SAFETY.md): コード保持と登録処理・管理外処理の契約。
 - [テストと Miri](TESTING.md): 再実行手順、テストの役割、確認できない範囲。
-- [Miri 導入時の監査記録](archive/MIRI_BASELINE.md): 修正前の借用違反の証拠。現在の利用手順とは区別する。
+- [変更履歴](../CHANGELOG.md): 利用者向けの変更点と破壊的変更。
+- [開発への参加](../CONTRIBUTING.md): ソース配置、確認方法、文書の更新方針（英語）。
 
 [English documentation](../docs/README.md)
 

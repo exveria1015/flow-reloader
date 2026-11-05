@@ -19,7 +19,7 @@ ctx.spawn_child(|stop| async move {
 ホストが `RequestTask` を poll するたびに、ルートと登録済み処理を進めます。
 生成クロージャは登録成功後の初回 poll まで呼びません。子は `'static` に限定し、
 ルートのスタックや Future への借用は持てません。
-実行できる例は `cargo run -p flow_reload --example managed_children` です。
+実行できる例は `cargo run -p flow_reload --example managed_children --locked` です。
 
 独立したランタイムの JoinHandle やコールバック登録には、
 `ctx.register_activity(adapter)` と `unsafe impl ManagedActivity` を使います。
@@ -97,25 +97,20 @@ join まで完了しても、登録処理の停止・終了で失敗があれば
 ## 検証
 
 ```powershell
-cargo test -p flow_reload --test managed_activities --test native_routing
-cargo run -p flow_reload --example managed_children
+cargo test -p flow_reload --test managed_activities --test native_routing --locked
+cargo run -p flow_reload --example managed_children --locked
 ./scripts/check-miri.ps1 -Toolchain nightly-2026-11-02
 ```
 
 `managed_activities` は遅延する子の終了、通常終了・panic、上限、停止後の登録拒否、
 Drop 後の終了待ち、解除失敗・終端エラー・確認後の再試行を検査します。
-Miri スクリプトにもこのテストを追加しています。
-今回のローカル実行では `-Toolchain nightly`（rustc 1.101.0-nightly、2026-11-01 ビルド）を使い、
-Linux インタープリターターゲット、seed 0 の Stacked / Tree 両モデルで確認しています。
-現在のスクリプトには非同期サービス・複数スレッドのグループも加えています。
-環境・ソースハッシュ・終了コードは `target/miri-audit/seed-0/` に保存しています。
+Miri では同じ管理経路を Linux インタープリターターゲット、Stacked / Tree 両借用モデルで検査します。
+実 DLL の試験はネイティブで別に実行します。ツールチェーンとログの扱いは [テスト](TESTING.md) を参照してください。
 
 `native_routing` はマクロ非依存の実 DLL で、別スレッドから DLL のコールバックを実行します。
 ホストが待機を解除するまでコールバックを実行中に保ち、ルート／Router の Drop 後も
 状態を保持し、コールバック帰還・スレッドjoin・アダプター破棄の順を確認します。
 解除要求の失敗が終了確認や切り替え成功と誤認されないこと、旧 Handler ABI 2～4 の拒否も検査します。
-この実 DLL の実行は Windows ローカルに加え、2026-11-06 の
-[CI](https://github.com/exveria1015/flow-reloader/actions/runs/42104208459) で Windows／Linux ともに成功しています。
 
 任意のランタイムや OS の購読解除 API への完成済みアダプター、強制停止、
 外部 I/O のロールバック、自動アンロードは提供しません。

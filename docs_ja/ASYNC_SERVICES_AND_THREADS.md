@@ -91,9 +91,9 @@ Waker が別スレッドから通知できることと、タスク本体を移�
 ## 実行・検証
 
 ```powershell
-cargo run -p flow_reload --example threaded_io
-cargo test -p flow_reload --test async_services --test threaded_services
-cargo test -p flow_reload --test native_threaded_io -- --ignored --test-threads=1 --nocapture
+cargo run -p threaded_io_host --locked
+cargo test -p flow_reload --test async_services --test threaded_services --locked
+cargo test -p threaded_io_host --test native_threaded_io --locked -- --ignored --test-threads=1 --nocapture
 ./scripts/check-miri.ps1 -Toolchain nightly-2026-11-02
 ```
 
@@ -103,16 +103,12 @@ cargo test -p flow_reload --test native_threaded_io -- --ignored --test-threads=
 残したまま Drain して、新旧それぞれの世代の結果を受け取ります。
 最後にロジック資源を所有スレッドで破棄し、作成スレッドで I/O ワーカーを join します。
 
-2026-11-05、Windows で、実 DLL＋TCP、読み取り待ち中のキャンセルとソケット解放、送信を再実行しないこと、
-キュー満杯・未回収結果の容量維持・FIFO・キャンセル済み待機要求の I/O 非実行・所有スレッドを確認しました。
+ネイティブ試験では実 DLL＋TCP、読み取り待ち中のキャンセルとソケット解放、送信を再実行しないこと、
+キュー満杯・未回収結果の容量維持・FIFO・キャンセル済み待機要求の I/O 非実行・所有スレッドを検査します。
 Miri は実 TCP を除く非同期サービスと複数所有スレッドの同期・通知・破棄を両借用モデルで検査します。
 Miri の Linux インタープリターターゲットでの成功を、Linux の実 DLL／実ネットワーク実行の証拠とは扱いません。
-2026-11-06 の [CI](https://github.com/exveria1015/flow-reloader/actions/runs/42104208459) では、
-同じ実 DLL＋TCP の経路も Windows／Linux で成功しました。
-ローカルの Stacked / Tree（seed 0）の環境・ソースハッシュ・結果を
-`target/miri-audit/seed-0/` に保存しています。Release、Clippy、ワークスペース、
-Bevy と Tauri のネイティブ統合も確認しました。
+実行方法と検証範囲の区別は [テスト](TESTING.md) を参照してください。
 
 この段階では任意の Future のスレッド間移動、スレッドプールへの DLL タスクの移管、
 I/O のロールバックや強制停止は提供しません。複数サービスの明示的な契約検査は
-[追加した契約機能](SERVICE_CONTRACTS_AND_INIT.md) を参照してください。
+[複数サービス・初期化データの契約](SERVICE_CONTRACTS_AND_INIT.md) を参照してください。

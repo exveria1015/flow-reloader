@@ -5,7 +5,7 @@
 From the workspace root:
 
 ```sh
-cargo run -p service_host
+cargo run -p service_host --locked
 ```
 
 Connect to `127.0.0.1:4000` with a TCP client and send newline-terminated messages.
@@ -17,7 +17,7 @@ five seconds, allowing an old request to remain active during a Drain cutover.
 This is a single-connection example. Builds are synchronous, and edits while
 waiting for input are processed at the next message boundary. Use the
 [Tauri GUI lab](TAURI_GUI_LAB.md) for an editor and background builds,
-or `cargo run -p flow_reload --example restart` for a minimal migration example.
+or `cargo run -p flow_reload --example restart --locked` for a minimal migration example.
 
 ## Split a new application
 
@@ -81,4 +81,4 @@ owned handles; the socket itself never crosses the DLL boundary.
 See the detailed [routing](../docs_ja/HOST_RESOURCES_AND_ROUTING.md) and
 [Restart](../docs_ja/RESTART_AND_MIGRATION.md) contracts before integrating workers.
 
-For static linking and feature selection, see [API consolidation](API_CONSOLIDATION.md).
+For static linking and feature selection, see [build configurations](API_REFERENCE.md#build-configurations).

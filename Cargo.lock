@@ -1512,7 +1512,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "contracts_host"
+version = "0.1.0"
+dependencies = [
+ "contracts_protocol",
+ "flow_reload",
+]
+
+[[package]]
 name = "contracts_logic"
+version = "0.1.0"
+dependencies = [
+ "contracts_protocol",
+ "flow_reload",
+]
+
+[[package]]
+name = "contracts_protocol"
 version = "0.1.0"
 dependencies = [
  "flow_reload",
@@ -5518,6 +5534,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1ad99c4c6d32803332c548b1af0540b357b3f5fc0be8f6c6bfe8b2e6ae784070"
 dependencies = [
  "cfg-if",
+]
+
+[[package]]
+name = "threaded_io_host"
+version = "0.1.0"
+dependencies = [
+ "flow_reload",
 ]
 
 [[package]]
