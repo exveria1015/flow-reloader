@@ -7,6 +7,14 @@ use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+// Unix fork/exec in another test can transiently duplicate a locked descriptor
+// until exec closes it. Isolate parent setups; deliberate process races remain
+// inside each test, including the competing-cleaner test below.
+static PARENT_SETUP: std::sync::Mutex<()> = std::sync::Mutex::new(());
+fn serial() -> std::sync::MutexGuard<'static, ()> {
+    PARENT_SETUP.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 fn fixture() -> PathBuf {
     static NEXT: AtomicU64 = AtomicU64::new(1);
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../target/cache-lifecycle-tests");
@@ -299,6 +307,7 @@ fn cache_descendant() {
 
 #[test]
 fn namespace_contention_and_child_handle_noninheritance_are_cross_process() {
+    let _serial = serial();
     let area = exited_area();
     let root = area.join("cache");
     let guard = OpenOptions::new()
@@ -325,6 +334,7 @@ fn namespace_contention_and_child_handle_noninheritance_are_cross_process() {
 #[cfg(windows)]
 #[test]
 fn failed_file_delete_keeps_trash_retryable_and_reports_actual_progress() {
+    let _serial = serial();
     use std::os::windows::fs::OpenOptionsExt;
     let area = exited_area();
     let root = area.join("cache");
@@ -351,6 +361,7 @@ fn failed_file_delete_keeps_trash_retryable_and_reports_actual_progress() {
 #[cfg(unix)]
 #[test]
 fn shared_writable_cache_root_is_refused_without_changing_permissions() {
+    let _serial = serial();
     use std::os::unix::fs::PermissionsExt;
     let area = fixture();
     directory(&area);
@@ -367,6 +378,7 @@ fn shared_writable_cache_root_is_refused_without_changing_permissions() {
 
 #[test]
 fn real_dll_retention_and_live_normal_and_forced_exit_cleanup() {
+    let _serial = serial();
     for kill in [false, true] {
         let area = fixture();
         let mut host = HostChild::start(&area, "lifecycle");
@@ -422,6 +434,7 @@ fn exited_area() -> PathBuf {
 
 #[test]
 fn corrupt_unknown_legacy_bounds_namespace_and_dry_run_revalidation() {
+    let _serial = serial();
     let area = exited_area();
     let root = area.join("cache");
     let opt = options(&root);
@@ -484,6 +497,7 @@ fn corrupt_unknown_legacy_bounds_namespace_and_dry_run_revalidation() {
 
 #[test]
 fn trash_resume_and_untrusted_links_never_follow_external_paths() {
+    let _serial = serial();
     let area = exited_area();
     let root = area.join("cache");
     let opt = options(&root);
@@ -525,6 +539,7 @@ fn trash_resume_and_untrusted_links_never_follow_external_paths() {
 
 #[test]
 fn cli_is_read_only_by_default_and_apply_uses_owned_sessions() {
+    let _serial = serial();
     let area = exited_area();
     let root = area.join("cache");
     let path = synthetic(&root, 20, false);
@@ -564,6 +579,7 @@ fn cli_is_read_only_by_default_and_apply_uses_owned_sessions() {
 #[cfg(windows)]
 #[test]
 fn unrelated_write_acl_is_refused_without_repairing_existing_root() {
+    let _serial = serial();
     let area = fixture();
     directory(&area);
     let grant = Command::new("icacls")
@@ -584,4 +600,51 @@ fn unrelated_write_acl_is_refused_without_repairing_existing_root() {
         std::io::ErrorKind::PermissionDenied
     );
     assert!(!area.join("managed-v1").exists());
+}
+
+#[test]
+fn competing_cleaner_processes_delete_each_copy_at_most_once() {
+    let _serial = serial();
+    let area = exited_area();
+    let root = area.join("cache");
+    let path = synthetic(&root, 50, false);
+    for id in 2..=256 {
+        fs::write(path.join("copies").join(format!("{id:016x}.dll")), b"copy").unwrap();
+    }
+    let spawn = || {
+        Command::new(env!("CARGO_BIN_EXE_flow-cache"))
+            .args(["clean", "--apply", "--root"])
+            .arg(&root)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap()
+    };
+    let first = spawn();
+    let second = spawn();
+    let outputs = [
+        first.wait_with_output().unwrap(),
+        second.wait_with_output().unwrap(),
+    ];
+    let mut deleted = 0;
+    for output in outputs {
+        if output.status.success() {
+            let stdout = String::from_utf8(output.stdout).unwrap();
+            deleted += stdout
+                .lines()
+                .last()
+                .unwrap()
+                .split_whitespace()
+                .find_map(|word| word.strip_prefix("deleted_files="))
+                .unwrap()
+                .parse::<u64>()
+                .unwrap();
+        } else {
+            assert_eq!(output.status.code(), Some(1));
+            assert!(String::from_utf8_lossy(&output.stderr).contains("busy"));
+        }
+    }
+    assert_eq!(deleted, 256);
+    assert!(!path.exists());
+    assert!(inspect_cache(&options(&root)).unwrap().entries.is_empty());
 }

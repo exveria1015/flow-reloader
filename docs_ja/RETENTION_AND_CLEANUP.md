@@ -111,7 +111,7 @@ cargo test -p flow_reload --test cache_lifecycle -- --test-threads=1
 - 実 DLL の現用・同一世代の複数候補・拒否・破棄・退役、静的 API と試行予算の区別。
 - 全 Router／旧 Runner の破棄後も生存中は削除せず、正常終了・強制終了後だけ適格になること。
 - 子プロセスが残っていても、終了した親ホストの lease を継承していないこと。
-- namespace の競合、表示後の lease 取得、壊れた／過大な meta、lease 欠落、未知ファイル、旧形式、走査上限。
+- namespace の競合、二つの掃除 CLI の同時 apply、表示後の lease 取得、壊れた／過大な meta、lease 欠落、未知ファイル、旧形式、走査上限。
 - junction とリンク先の sentinel を削除しないこと、trash の途中状態、実際のファイル削除失敗と再試行。
 - CLI の既定が読み取りであることと、明示 apply の削除。
 
