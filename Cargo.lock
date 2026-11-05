@@ -1523,6 +1523,7 @@ dependencies = [
 name = "contracts_logic"
 version = "0.1.0"
 dependencies = [
+ "contracts_protocol",
  "flow_reload",
 ]
 
