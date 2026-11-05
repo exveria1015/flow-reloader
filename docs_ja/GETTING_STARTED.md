@@ -33,7 +33,7 @@ edition = "2021"
 crate-type = ["cdylib"]
 
 [dependencies]
-flow_reload = { path = "../../flow_reload" }
+flow_reload = { path = "../../flow_reload", default-features = false }
 ```
 
 クレートを workspace members に追加します。ホストとロジック間のサービス ID・版・操作番号・
@@ -71,9 +71,4 @@ async fn handle(ctx: RequestContext) -> Result<(), ServiceError> {
 詳細は [ホスト資源と受付](HOST_RESOURCES_AND_ROUTING.md)、
 [Restart と移行](RESTART_AND_MIGRATION.md) を参照してください。
 
-## 旧 API を利用する場合
-
-`FlowRunner` / `AppState` / `main!` / attached ヘルパーは互換用に残っています。
-Handler ABI 2 とは別の ABI v4 を使います。[サンプル一覧](../examples/README.md) で用途を区別しています。
-`with_context*` はすべて unsafe です。型・レイアウト・排他性に加え、外部へ逃げた参照と終了処理を含む
-全アクセス終了までの寿命を呼び出し元が保証します。安全な `main!` の context 形式はありません。
+静的リンクと feature の選択は [API の一本化](API_CONSOLIDATION.md) を参照してください。

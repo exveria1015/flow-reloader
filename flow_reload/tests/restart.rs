@@ -301,8 +301,8 @@ fn failed_worker_and_failed_new_factory_leave_admission_paused() {
             Checkpoint::new(V1, vec![1]),
         )
         .unwrap();
-    unsafe extern "C" fn invalid(_: *const HandlerRequest) -> AttachedFuture {
-        AttachedFuture {
+    unsafe extern "C" fn invalid(_: *const HandlerRequest) -> TaskHandle {
+        TaskHandle {
             data: std::ptr::null_mut(),
             vtable: std::ptr::null(),
         }
@@ -339,9 +339,9 @@ fn partially_staged_workers_are_destroyed_without_running_their_bodies() {
             )
             .unwrap();
     }
-    unsafe extern "C" fn partial(raw: *const HandlerRequest) -> AttachedFuture {
+    unsafe extern "C" fn partial(raw: *const HandlerRequest) -> TaskHandle {
         if *(*raw).input == 2 {
-            AttachedFuture {
+            TaskHandle {
                 data: std::ptr::null_mut(),
                 vtable: std::ptr::null(),
             }

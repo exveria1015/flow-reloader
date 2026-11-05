@@ -4,7 +4,25 @@ on:
   push:
   pull_request:
 
+env:
+  CARGO_INCREMENTAL: '0'
+
+defaults:
+  run:
+    shell: bash
+
 jobs:
+  msrv:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install minimum core Rust
+        run: rustup toolchain install 1.95.0 --profile minimal
+      - name: Core feature configurations
+        run: |
+          cargo +1.95.0 check -p interface -p hot_macro -p flow_reload --all-targets --all-features --locked
+          cargo +1.95.0 check -p flow_reload --all-targets --no-default-features --locked
+
   windows-gui:
     runs-on: windows-latest
     steps:
@@ -20,9 +38,9 @@ jobs:
       - name: Frontend syntax and Tauri lints
         run: |
           node --check examples/tauri_tokio/dist/main.js
-          cargo clippy -p tauri_tokio -p tauri_tokio_logic --all-targets -- -D warnings
+          cargo clippy -p tauri_tokio -p tauri_tokio_logic --all-targets --locked -- -D warnings
       - name: Native GUI backend integration (no window required)
-        run: cargo test -p tauri_tokio --bin tauri_tokio -- --ignored --test-threads=1
+        run: cargo test -p tauri_tokio --bin tauri_tokio --locked -- --ignored --test-threads=1
 
   miri:
     runs-on: ubuntu-latest
@@ -36,7 +54,7 @@ jobs:
         run: rustup toolchain install nightly-2026-11-02 --profile minimal --component miri --component rust-src
       - name: Prepare interpreter sysroot
         run: cargo +nightly-2026-11-02 miri setup --target x86_64-unknown-linux-gnu
-      - name: Check async ownership and generated entrypoints
+      - name: Check task ownership, routing and generated handlers
         shell: pwsh
         run: ./scripts/check-miri.ps1 -Toolchain nightly-2026-11-02 -BorrowModel ${{ matrix.model }}
       - name: Save diagnostics
@@ -62,20 +80,48 @@ jobs:
       - name: Formatting
         run: |
           cargo fmt --all -- --check
-          rustfmt --check flow_reload/tests/fixtures/logic.rs
           rustfmt --check flow_reload/tests/fixtures/handler.rs
       - name: Core lints (default features)
-        run: cargo clippy -p interface -p hot_macro -p flow_reload --all-targets -- -D warnings
+        run: cargo clippy -p interface -p hot_macro -p flow_reload --all-targets --locked -- -D warnings
       - name: Core lints (all features)
-        run: cargo clippy -p interface -p hot_macro -p flow_reload --all-targets --all-features -- -D warnings
+        run: cargo clippy -p interface -p hot_macro -p flow_reload --all-targets --all-features --locked -- -D warnings
+      - name: Public API documentation
+        env:
+          RUSTDOCFLAGS: '-D warnings'
+        run: cargo doc -p interface -p hot_macro -p flow_reload --all-features --no-deps --locked
       - name: Core tests (default features)
-        run: cargo test -p interface -p hot_macro -p flow_reload
+        run: cargo test -p interface -p hot_macro -p flow_reload --locked
+      - name: Cache retention and separate host/cleaner processes
+        run: cargo test -p flow_reload --test cache_lifecycle --locked -- --test-threads=1
       - name: Workspace tests without the GUI application
-        run: cargo test --workspace --exclude tauri_tokio --all-features
-      - name: Release tests and macro expansion
-        run: cargo test -p interface -p hot_macro -p flow_reload --release --all-features
-      - name: Individual runtime features
+        run: cargo test --workspace --exclude tauri_tokio --all-features --locked
+      - name: Native asynchronous I/O and multiple owner threads
+        run: cargo test -p flow_reload --test native_threaded_io --locked -- --ignored --test-threads=1
+      - name: Native multi-service contracts and typed initialization
         run: |
-          cargo check -p flow_reload --no-default-features --features tokio
-          cargo check -p flow_reload --no-default-features --features async-std
-          cargo check -p flow_reload --no-default-features --features smol
+          cargo clippy -p contracts_logic --all-targets --all-features --locked -- -D warnings
+          cargo test -p flow_reload --test native_contracts --locked -- --ignored --test-threads=1
+      - name: Host resource and SQLite migration
+        run: |
+          cargo clippy -p db_migration_host -p db_migration_logic --all-targets --all-features --locked -- -D warnings
+          cargo test -p db_migration_host --test native_migration --locked -- --ignored --test-threads=1
+      - name: Bevy game lints and native frame integration
+        run: |
+          cargo clippy -p bevy_game_host -p bevy_game_logic -p bevy_game_protocol --all-targets --all-features --locked -- -D warnings
+          cargo test -p bevy_game_host --test native_game --locked -- --ignored --test-threads=1
+      - name: Release tests and macro expansion
+        run: cargo test -p interface -p hot_macro -p flow_reload --release --all-features --locked
+      - name: Static and native-only features
+        run: |
+          cargo clippy -p flow_reload --all-targets --no-default-features --locked -- -D warnings
+          cargo test -p flow_reload --no-default-features --locked
+          cargo clippy -p flow_reload --all-targets --no-default-features --features native --locked -- -D warnings
+          cargo clippy -p service_host --all-targets --no-default-features --features static-logic --locked -- -D warnings
+          cargo test -p service_host --release --no-default-features --features static-logic --locked
+      - name: Static dependency boundary
+        shell: pwsh
+        run: |
+          $dependencies = cargo tree -p service_host --no-default-features --features static-logic --edges normal --prefix none --format '{p}' --locked
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot inspect static dependency graph' }
+          $forbidden = $dependencies | Select-String '^(libloading|notify|tokio|async-std|smol|libc|windows-sys) '
+          if ($forbidden) { throw "Unexpected static dependencies: $forbidden" }

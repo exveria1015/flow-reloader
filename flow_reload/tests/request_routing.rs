@@ -136,10 +136,8 @@ fn revocation_after_admission_fails_without_replaying_the_request() {
 
 #[test]
 fn failed_task_creation_does_not_leave_a_phantom_in_flight_request() {
-    unsafe extern "C" fn invalid(
-        _: *const flow_reload::HandlerRequest,
-    ) -> flow_reload::AttachedFuture {
-        flow_reload::AttachedFuture {
+    unsafe extern "C" fn invalid(_: *const flow_reload::HandlerRequest) -> flow_reload::TaskHandle {
+        flow_reload::TaskHandle {
             data: std::ptr::null_mut(),
             vtable: std::ptr::null(),
         }

@@ -1,11 +1,13 @@
 [package]
+publish = false
 name = "service_logic"
 version = "0.1.0"
-edition = "2021"
+edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 
 [lib]
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-flow_reload = { path = "../../flow_reload" }
+flow_reload = { path = "../../flow_reload", default-features = false }

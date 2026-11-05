@@ -7,6 +7,9 @@ use std::net::{TcpListener, TcpStream};
 use std::pin::Pin;
 use std::task::{Context, Poll, Waker};
 
+#[cfg(not(any(feature = "reload", feature = "static-logic")))]
+compile_error!("enable reload or static-logic");
+
 const LINE_SESSION: ServiceKey = ServiceKey::new(0x4c49_4e45, 1);
 
 struct Session {
@@ -27,21 +30,28 @@ impl HostResource for Session {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let logic = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../service_logic");
-    let target = flow_reload::internal::default_target_dir(&logic);
-    if !flow_reload::internal::build_logic("service_logic", &logic, &target)?.success() {
-        return Err("initial logic build failed".into());
-    }
-    let library = flow_reload::internal::library_path_in(&target, "service_logic");
     let host = HostResources::new();
-    // SAFETY: the local SDK handler and all manually edited replacements are
-    // trusted code obeying the handler's copy/retain and task ownership contracts.
-    let mut router = unsafe { RequestRouter::load(&library, host.clone()) }?;
-    let mut watcher = flow_reload::internal::start_source_watcher(&logic);
+    #[cfg(feature = "reload")]
+    let (mut router, mut watcher, logic, target, library) = {
+        let logic = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../service_logic");
+        let target = flow_reload::development::default_target_dir(&logic);
+        if !flow_reload::development::build_logic("service_logic", &logic, &target)?.success() {
+            return Err("initial logic build failed".into());
+        }
+        let library = flow_reload::development::library_path_in(&target, "service_logic");
+        // SAFETY: the local SDK handler and all manually edited replacements are
+        // trusted code obeying the handler's copy/retain and task ownership contracts.
+        let router = unsafe { RequestRouter::load(&library, host.clone()) }?;
+        let watcher = flow_reload::development::start_source_watcher(&logic);
+        (router, watcher, logic, target, library)
+    };
+    #[cfg(all(feature = "static-logic", not(feature = "reload")))]
+    // SAFETY: generated callbacks are statically linked and own their request data.
+    let router = unsafe { RequestRouter::from_api(service_logic::handler_api(), host.clone()) }?;
     let address = std::env::var("FLOW_RELOAD_ADDR").unwrap_or_else(|_| "127.0.0.1:4000".into());
     let listener = TcpListener::bind(address)?;
     println!(
-        "Listening on {}. Send newline-terminated text; edit service_logic to reload.",
+        "Listening on {}. Send newline-terminated text.",
         listener.local_addr()?
     );
 
@@ -68,8 +78,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         let mut task = None;
         loop {
-            if flow_reload::internal::source_changed(&mut watcher) {
-                match flow_reload::internal::build_logic("service_logic", &logic, &target) {
+            #[cfg(feature = "reload")]
+            if flow_reload::development::source_changed(&mut watcher) {
+                match flow_reload::development::build_logic("service_logic", &logic, &target) {
                     Ok(status) if status.success() => {
                         // Same trusted-source contract as the initial load.
                         let prepared = unsafe { router.prepare(&library) };

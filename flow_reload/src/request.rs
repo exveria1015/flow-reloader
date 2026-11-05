@@ -1,5 +1,5 @@
 use crate::Checkpoint;
-use crate::{AttachedFuture, AttachedFutureVTable, HostWaker, RunStatus, Services};
+use crate::{HostWaker, RunStatus, Services, TaskHandle, TaskVTable};
 use interface::services::{
     HandlerHeader, HostTaskControl, HostTaskVTable, TASK_CONTROL_ABI_VERSION,
 };
@@ -43,9 +43,41 @@ pub struct RequestContext {
     input: Vec<u8>,
     control: TaskControl,
     checkpoint: Option<Checkpoint>,
+    bindings: Vec<crate::ServiceBinding>,
+    initial: Option<crate::InitData>,
 }
 
 impl RequestContext {
+    /// Registers a cooperative local child. Its factory runs only on first poll,
+    /// after successful registration. The request cannot complete until it joins.
+    pub fn spawn_child<F: Future<Output = Result<(), ServiceError>> + 'static>(
+        &self,
+        make: impl FnOnce(crate::ChildStop) -> F + 'static,
+    ) -> Result<(), ServiceError> {
+        let stop = crate::ChildStop::default();
+        let child_stop = stop.clone();
+        self.register_activity(crate::activity::Child {
+            stop,
+            future: Some(Box::pin(async move { make(child_stop).await })),
+        })
+    }
+
+    /// Registers an owned adapter for a child join handle or callback registration.
+    /// A rejected adapter is dropped before first poll; no ownership crosses on error.
+    pub fn register_activity(
+        &self,
+        activity: impl crate::ManagedActivity,
+    ) -> Result<(), ServiceError> {
+        let raw = crate::activity::into_raw(activity);
+        let status =
+            unsafe { ((*self.control.0.vtable).register_activity)(self.control.0.data, raw) };
+        if status == 0 {
+            Ok(())
+        } else {
+            unsafe { crate::activity::reject(raw) };
+            Err(ServiceError(status))
+        }
+    }
     /// # Safety
     /// request and its input must be readable for this call. Services must obey
     /// Services::clone_from_raw's lifetime, ABI and owner-thread contracts.
@@ -54,6 +86,44 @@ impl RequestContext {
             return Err(ServiceError::INVALID_ARGUMENT);
         }
         let request = &*request;
+        if request.bindings_len > crate::MAX_SERVICE_REQUIREMENTS
+            || (request.bindings_len != 0 && request.bindings.is_null())
+            || request.init_len > crate::MAX_INIT_BYTES
+            || (request.init_len != 0 && request.init.is_null())
+        {
+            return Err(ServiceError::INVALID_ARGUMENT);
+        }
+        let bindings = if request.bindings_len == 0 {
+            Vec::new()
+        } else {
+            std::slice::from_raw_parts(request.bindings, request.bindings_len).to_vec()
+        };
+        let mut ids = Vec::new();
+        for binding in &bindings {
+            if binding.binding == 0
+                || !crate::environment::valid_key(binding.service)
+                || ids.contains(&binding.binding)
+            {
+                return Err(ServiceError::CONTRACT_MISMATCH);
+            }
+            ids.push(binding.binding);
+        }
+        let initial = if crate::environment::absent_key(request.init_schema) {
+            if request.init_len != 0 {
+                return Err(ServiceError::CONTRACT_MISMATCH);
+            }
+            None
+        } else {
+            if !crate::environment::valid_key(request.init_schema) {
+                return Err(ServiceError::CONTRACT_MISMATCH);
+            }
+            let bytes = if request.init_len == 0 {
+                Vec::new()
+            } else {
+                std::slice::from_raw_parts(request.init, request.init_len).to_vec()
+            };
+            Some(crate::InitData::new(request.init_schema, bytes))
+        };
         let services = Services::clone_from_raw(request.services)?;
         let control = TaskControl::retain(request.control)?;
         let checkpoint = if request.state_schema.id == 0 {
@@ -85,6 +155,8 @@ impl RequestContext {
             input,
             control,
             checkpoint,
+            bindings,
+            initial,
         })
     }
 
@@ -99,6 +171,33 @@ impl RequestContext {
     }
     pub fn services(&self) -> &Services {
         &self.services
+    }
+    pub fn binding(&self, binding: u64) -> Result<crate::ServiceBinding, ServiceError> {
+        self.bindings
+            .iter()
+            .find(|entry| entry.binding == binding)
+            .copied()
+            .ok_or(ServiceError::REVOKED)
+    }
+    pub fn initial_data(&self) -> Option<&crate::InitData> {
+        self.initial.as_ref()
+    }
+    pub fn initial<T: crate::InitPayload>(&self) -> Result<T, ServiceError> {
+        self.initial
+            .as_ref()
+            .ok_or(ServiceError::CONTRACT_MISMATCH)?
+            .decode::<T>()
+    }
+    pub fn call_service(
+        &self,
+        binding: u64,
+        operation: u32,
+        input: &[u8],
+        output: &mut [u8],
+    ) -> Result<usize, ServiceError> {
+        let target = self.binding(binding)?;
+        self.services
+            .call(target.resource, target.service, operation, input, output)
     }
     pub fn input(&self) -> &[u8] {
         &self.input
@@ -158,14 +257,14 @@ struct HandlerFuture(Pin<Box<dyn Future<Output = RunStatus>>>);
 #[doc(hidden)]
 pub fn make_handler_future(
     future: Pin<Box<dyn Future<Output = Result<(), ServiceError>>>>,
-) -> AttachedFuture {
+) -> TaskHandle {
     let future = Box::pin(async move {
         match future.await {
             Ok(()) => RunStatus::Done,
             Err(_) => RunStatus::Error,
         }
     });
-    AttachedFuture {
+    TaskHandle {
         data: Box::into_raw(Box::new(HandlerFuture(future))).cast(),
         vtable: &VTABLE,
     }
@@ -173,12 +272,12 @@ pub fn make_handler_future(
 
 unsafe extern "C" fn poll(data: *mut c_void, waker: *const HostWaker) -> RunStatus {
     let future = &mut *data.cast::<HandlerFuture>();
-    crate::attached::poll_attached_result_future(future.0.as_mut(), waker)
+    crate::task::poll_result_future(future.0.as_mut(), waker)
 }
 unsafe extern "C" fn destroy(data: *mut c_void) {
     drop(Box::from_raw(data.cast::<HandlerFuture>()));
 }
-static VTABLE: AttachedFutureVTable = AttachedFutureVTable {
+static VTABLE: TaskVTable = TaskVTable {
     poll,
     drop: destroy,
 };

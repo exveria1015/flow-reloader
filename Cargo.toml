@@ -3,22 +3,22 @@ members = [
     "interface",
     "hot_macro",
     "flow_reload",
-    "examples/sync_logic",
-    "examples/sync_host",
-    "examples/async_tokio_logic",
-    "examples/async_tokio_host",
-    "examples/async_std_logic",
-    "examples/async_std_host",
-    "examples/async_smol_logic",
-    "examples/async_smol_host",
-    "examples/snapshot_logic",
-    "examples/snapshot_host",
     "examples/service_logic",
     "examples/service_host",
+    "examples/threaded_io_logic",
+    "examples/contracts_logic",
+    "examples/db_migration_host",
+    "examples/db_migration_logic",
+    "examples/bevy_game_protocol",
+    "examples/bevy_game_logic",
+    "examples/bevy_game_host",
     "examples/tauri_tokio_logic",
     "examples/tauri_tokio/src-tauri",
 ]
+default-members = ["interface", "hot_macro", "flow_reload"]
 resolver = "2"
 
 [workspace.package]
+edition = "2021"
+rust-version = "1.95"
 license = "MIT OR Apache-2.0"

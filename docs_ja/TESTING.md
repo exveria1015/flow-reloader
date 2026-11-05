@@ -5,19 +5,24 @@
 | 対象 | 確認するもの |
 | --- | --- |
 | `host_resources` | 所有、失効、資源 ID・版、借用競合、出力容量、panic 境界 |
+| `cache_lifecycle` | 別プロセスのホスト／CLI、画像の状態、Router Drop 後の lease、正常／強制終了、非継承、namespace 競合、trash 再試行、不明／旧形式／リンクの除外 |
 | `request_routing` | 入力コピー、Drain、候補拒否、受付停止・再開、Router より長い実行寿命 |
 | `restart` | 協調停止、旧 Drain 世代の終了待ち、移行の段階適用、失敗・中断・再試行、上限 |
-| `native_routing` | 実 DLL と同じ TCP 接続、異なる DLL 間のチェックポイント形式変更 |
-| `async_direct` / `async_snapshot` / `execution` | 生成コードと所有状態の借用、同時 Pending、完了・panic・キャンセル・破棄順序 |
-| `runner::tests` | 旧 API の実 DLL 寿命、失敗候補、管理外タスク、限定した明示的アンロード |
-| `main_macro` | 公開9形式のコンパイル確認。テスト件数0でも Debug／Release の展開を検査する |
-| `release_main` | 実際の Release `main!` を実行し、Pending 中に状態を tick へ公開しないこと |
+| `host_commit` | 確定フックの順序・一回性、それ以前の失敗・中断・再試行・panic |
+| DB host `database` | 実 SQLite の schema/data rollback、BEGIN／COMMIT 競合、キャッシュ排他、復旧時の遮断、overflow |
+| DB host `native_migration`（ignored） | 実 DLL 3種類の互換 Drain・非互換 Restart、rollback／再試行、旧資源の拒否、永続版の再 open |
+| `managed_activities` | 明示登録、子の遅延終了、解除失敗、Drop 後の終了待ち、上限、panic と再試行 |
+| `async_services` | 入出力コピー・サイズと枠の上限、キャンセル終了待ち、失効、操作 ID、バッファ不足での結果保持 |
+| `threaded_services` | FIFO・容量・通知・shutdown／join、2本のロジック所有スレッド、実 TCP と読み取り中キャンセル |
+| `native_threaded_io`（ignored） | 実 SDK DLL 2世代、2本のロジックスレッド、ホスト所有の TCP I/O、Drain と所有スレッドでの破棄 |
+| `service_contracts` | 複数要求・明示割り当て、初期化スキーマ・形式・panic拒否、失効の再検査、世代間の設定保持 |
+| `native_contracts`（ignored） | 実 SDK DLL 2世代のサービス不足・版違い・初期化形式拒否、同期／非同期の複数サービス利用 |
+| `native_routing` | 実 DLL と同じ TCP 接続、チェックポイント形式変更、別スレッドのコールバック帰還・join・解除失敗、旧 ABI 拒否 |
+| Bevy `native_game` の ignored テスト | 実 DLL と Bevy ECS、フレーム境界、遅延停止・復元、旧世代・Entity・入力版の結果検査、所有スレッド |
 | Tauri `engine` の ignored テスト | 独立プロジェクトの実 DLL ビルド、Drain／Restart、値の継続、構文エラー復帰、作業ディレクトリから独立したコピー |
 
-`fixtures/logic.rs` と `fixtures/handler.rs` は proc macro に依存しない独立した ABI 実装です。
+`fixtures/handler.rs` は proc macro に依存しない独立した ABI 実装です。
 マクロ生成側とローダー側が同じ誤りを共有しても検出できるように残しています。
-Tokio／async-std／smol のサンプルも、それぞれ別のホストアダプターを使います。
-似たコードであることだけを理由に、これらの検証対象を削除しません。
 
 ## 通常の確認
 
@@ -25,7 +30,6 @@ Tokio／async-std／smol のサンプルも、それぞれ別のホストアダ�
 
 ```powershell
 cargo fmt --all -- --check
-rustfmt --check flow_reload/tests/fixtures/logic.rs
 rustfmt --check flow_reload/tests/fixtures/handler.rs
 cargo clippy -p interface -p hot_macro -p flow_reload --all-targets -- -D warnings
 cargo clippy -p interface -p hot_macro -p flow_reload --all-targets --all-features -- -D warnings
@@ -45,6 +49,39 @@ node --check examples/tauri_tokio/dist/main.js
 ignored 統合テストは一時的にテストプロセスの作業ディレクトリを変えるため、単一テストスレッドで実行します。
 実際の GUI の見た目・操作は [GUI Lab](TAURI_GUI_LAB.md) の手順で確認してください。
 
+## Bevy ゲーム統合
+
+Bevy のネイティブ統合は描画なしで別途確認します。詳しくは [ゲームへの最小適用](BEVY_GAME.md)。
+
+```powershell
+cargo clippy -p bevy_game_host -p bevy_game_logic -p bevy_game_protocol --all-targets --all-features -- -D warnings
+cargo test -p bevy_game_host --test native_game -- --ignored --test-threads=1
+```
+
+## ホスト資源・SQLite の移行
+
+```powershell
+cargo clippy -p db_migration_host -p db_migration_logic --all-targets --all-features -- -D warnings
+cargo test -p db_migration_host --test database
+cargo test -p db_migration_host --test native_migration -- --ignored --test-threads=1
+```
+
+この例だけが rusqlite と bundled SQLite に依存し、C コンパイラが必要です。
+DB は `target/` 内に新規作成し、既存アプリの DB は使用しません。
+[移行方針と限界](HOST_RESOURCE_MIGRATION.md) を参照してください。
+
+## 保持量とコピーの掃除
+
+```powershell
+cargo test -p flow_reload --test cache_lifecycle -- --test-threads=1
+```
+
+`target/cache-lifecycle-tests/` 内の独立したルートで、ホスト子プロセスと実 CLI を動かします。
+利用者の既定コピー領域を apply するテストではありません。
+ignored の2関数は親テストからだけ呼ぶ子プロセスの入口です。
+共通の終了・排他・掃除に加え、Windows では削除拒否・junction、Unix では symlink・共有書き込み可能なルートの拒否を検査します。
+これらの OS・ファイル検査は Miri の対象外です。[利用契約](RETENTION_AND_CLEANUP.md) を参照してください。
+
 ## Miri
 
 固定ツールチェーンと Linux インタープリターターゲットを使います。通常ビルドの既定ツールチェーンは変更しません。
@@ -57,8 +94,9 @@ cargo +nightly-2026-11-02 miri setup --target x86_64-unknown-linux-gnu
 
 スクリプトは Stacked／Tree Borrows の両方を seed 0 で実行します。
 `-Seed 1` で別 seed、`-BorrowModel Stacked` または `Tree` で単独実行できます。
-対象は attached、direct、snapshot、execution、resources、routing、restart、Release main です。
-Release 指定はマクロの分岐を選ぶためで、最適化した機械語の検証ではありません。
+対象は task、resources、routing、restart、host commit、managed activities、async services、threaded services、service contracts です。
+Miri では threaded services の実 TCP テストを除外し、同期・通知・所有の検査だけを行います。
+SQLite と C コードはネイティブで確認し、Miri はコアの確定フックの管理だけを対象にします。
 
 ログ、コンパイラ情報、対象ソースと Cargo.lock の SHA-256、終了コードを `target/miri-audit/seed-<seed>/` に保存します。
 失敗しても残りのグループを実行し、失敗があれば非ゼロで終了します。
@@ -66,11 +104,19 @@ DLL・ネットワークを使うテストを Miri が代替するわけでは�
 
 ## 検証範囲
 
-Windows の実 DLL、両借用モデルの Miri、Tauri バックエンドと実ウィンドウにはローカルの確認記録があります。
-[CI 設定](../.github/workflows/ci.yml) は Windows／Linux のコア、Linux インタープリター、Windows GUI バックエンドを対象にしています。
-リモート CI の成功と Linux 実 DLL・Linux GUI の実行結果は、このローカル確認からは主張しません。
-各コマンドの現在の結果は実際の出力で確認してください。古い時点のテスト件数を現在の完了条件にはしません。
+今回の API 整理後は、Windows／Linux CI と Miri 両モデルを改めて確認します。
+整理前の CI 結果は [初期版の検証記録](archive/INITIAL_MILESTONE.md) に残しています。
+Windows ローカルの成功を Linux や実 GUI の確認結果として扱いません。
 
-Miri は選んだ経路、ネイティブテストは専用フィクスチャ、GUI 確認はサンプルの挙動を検証します。
-任意の DLL・依存ライブラリの安全性、管理外タスクの終了、自動アンロード全般を保証するものではありません。
-過去の検出証拠は [監査記録](archive/MIRI_BASELINE.md)、現在の所有契約は [寿命管理](LIFETIME_REVIEW.md) に分けています。
+## 静的構成と native 単独構成
+
+```sh
+cargo clippy -p flow_reload --all-targets --no-default-features --locked -- -D warnings
+cargo test -p flow_reload --no-default-features --locked
+cargo check -p flow_reload --no-default-features --features native --locked
+cargo test -p service_host --release --no-default-features --features static-logic --locked
+cargo tree -p service_host --no-default-features --features static-logic --edges normal
+```
+
+静的構成の依存ツリーに libloading・notify・旧ランタイムアダプターが含まれないことを確認します。
+既定の対象はコア3 crate です。サンプルは `-p` または `--workspace` で明示的に選びます。

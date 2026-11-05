@@ -1,3 +1,4 @@
+#![cfg(all(not(miri), feature = "dev-tools"))]
 use flow_reload::{
     HostResource, HostResources, RequestRouter, RequestTask, RouteError, RunStatus, ServiceError,
     ServiceKey,
@@ -10,6 +11,164 @@ use std::pin::Pin;
 use std::process::Command;
 use std::task::{Context, Poll, Waker};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+#[derive(Default)]
+struct CallbackSession {
+    release: bool,
+    events: Vec<Vec<u8>>,
+}
+impl HostResource for CallbackSession {
+    fn call(
+        &mut self,
+        operation: u32,
+        input: &[u8],
+        output: &mut [u8],
+    ) -> Result<usize, ServiceError> {
+        if operation == 1 {
+            output[0] = u8::from(self.release);
+            Ok(1)
+        } else {
+            if self.events.last().map(Vec::as_slice) != Some(input) {
+                self.events.push(input.to_vec());
+            }
+            Ok(0)
+        }
+    }
+}
+fn has_event(session: &flow_reload::Resource<CallbackSession>, event: &[u8]) -> bool {
+    session
+        .try_borrow()
+        .unwrap()
+        .events
+        .iter()
+        .any(|value| value == event)
+}
+fn drive_until(mut condition: impl FnMut() -> bool) {
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while !condition() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "native callback timeout"
+        );
+        std::thread::yield_now();
+    }
+}
+
+#[test]
+fn native_callback_state_outlives_root_and_router_until_external_return_and_join() {
+    let fixture = Fixture::new();
+    let library = fixture.build("callback_join", &["managed_activity"]);
+    let resources = HostResources::new();
+    let session = resources.register(ServiceKey::new(7, 1), CallbackSession::default());
+    let mut router = unsafe { RequestRouter::load(&library, resources) }.unwrap();
+    let mut task = router.dispatch(session.id(), b"callback").unwrap();
+    let mut cx = Context::from_waker(Waker::noop());
+    drive_until(|| {
+        assert!(Pin::new(&mut task).poll(&mut cx).is_pending());
+        has_event(&session, b"callback_active")
+    });
+    assert_eq!(task.status(), None);
+    let candidate = unsafe { router.prepare(&library) }.unwrap();
+    router.activate(candidate).unwrap();
+    drop(task);
+    assert_eq!(router.in_flight(), 1);
+    let candidate = unsafe { router.prepare(&library) }.unwrap();
+    let mut restart = router
+        .restart(candidate, |_, old, _| Ok(old.clone()))
+        .unwrap();
+    assert!(Pin::new(&mut restart).poll(&mut cx).is_pending());
+    drop(restart);
+    assert!(!has_event(&session, b"callback_joined"));
+    assert!(!has_event(&session, b"activity_drop"));
+    drop(router);
+    session.try_borrow_mut().unwrap().release = true;
+    drive_until(|| flow_reload::poll_cancelled_requests(&mut cx).is_ready());
+    let events = &session.try_borrow().unwrap().events;
+    let joined = events
+        .iter()
+        .position(|event| event == b"callback_joined")
+        .unwrap();
+    let dropped = events
+        .iter()
+        .position(|event| event == b"activity_drop")
+        .unwrap();
+    assert!(joined < dropped);
+}
+
+#[test]
+fn native_failed_unsubscribe_does_not_certify_quiescence_or_allow_restart() {
+    let fixture = Fixture::new();
+    let library = fixture.build(
+        "callback_failure",
+        &["managed_activity", "activity_stop_fails"],
+    );
+    let resources = HostResources::new();
+    let session = resources.register(ServiceKey::new(7, 1), CallbackSession::default());
+    let mut router = unsafe { RequestRouter::load(&library, resources) }.unwrap();
+    let mut task = router.dispatch(session.id(), b"callback").unwrap();
+    let mut cx = Context::from_waker(Waker::noop());
+    assert!(Pin::new(&mut task).poll(&mut cx).is_pending());
+    assert!(Pin::new(&mut task).poll(&mut cx).is_pending());
+    assert_eq!(task.activity_error(), Some(ServiceError::FAILED));
+    assert_eq!(task.activity_count(), 1);
+    drop(task);
+    let candidate = unsafe { router.prepare(&library) }.unwrap();
+    let mut restart = router
+        .restart(candidate, |_, old, _| Ok(old.clone()))
+        .unwrap();
+    assert!(Pin::new(&mut restart).poll(&mut cx).is_pending());
+    assert!(!has_event(&session, b"activity_drop"));
+    session.try_borrow_mut().unwrap().release = true;
+    drive_until(|| match Pin::new(&mut restart).poll(&mut cx) {
+        Poll::Pending => false,
+        Poll::Ready(result) => {
+            assert!(matches!(
+                result,
+                Err(RouteError::ActivityFailed { generation: 1 })
+            ));
+            true
+        }
+    });
+    drop(restart);
+    assert_eq!(router.generation(), 1);
+    assert_eq!(router.in_flight(), 0);
+    assert!(!router.is_accepting());
+    assert!(has_event(&session, b"callback_joined"));
+    assert!(has_event(&session, b"activity_drop"));
+}
+
+#[test]
+fn legacy_handler_abi_cannot_silently_skip_registered_activity_contract() {
+    let fixture = Fixture::new();
+    let library = fixture.build("legacy_handler", &["legacy_handler_abi"]);
+    assert!(matches!(
+        unsafe { RequestRouter::load(library, HostResources::new()) },
+        Err(RouteError::Abi { version: 2, .. })
+    ));
+}
+
+#[test]
+fn previous_handler_abi_is_rejected_before_accessing_services_extension() {
+    let fixture = Fixture::new();
+    let library = fixture.build("previous_handler", &["previous_handler_abi"]);
+    assert!(matches!(
+        unsafe { RequestRouter::load(library, HostResources::new()) },
+        Err(RouteError::Abi { version: 3, .. })
+    ));
+}
+
+#[test]
+fn version_four_header_is_rejected_without_reading_extended_manifest() {
+    let fixture = Fixture::new();
+    let library = fixture.build("old_header_only", &["header_only_v4"]);
+    assert!(matches!(
+        unsafe { RequestRouter::load(library, HostResources::new()) },
+        Err(RouteError::Abi {
+            version: 4,
+            size: 8
+        })
+    ));
+}
 
 struct Fixture(PathBuf);
 impl Drop for Fixture {
@@ -29,7 +188,9 @@ impl Fixture {
         fixture
     }
     fn build(&self, name: &str, flags: &[&str]) -> PathBuf {
-        let path = self.0.join(flow_reload::internal::library_file_name(name));
+        let path = self
+            .0
+            .join(flow_reload::development::library_file_name(name));
         let mut command = Command::new("rustc");
         command
             .args([

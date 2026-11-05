@@ -2,7 +2,7 @@
 
 An English-language UI for editing trusted local Rust logic while the host window
 stays open. The package name `tauri_tokio` is historical; the example uses the
-message API, not the older attached-runtime bridge.
+message API for both request handling and worker Restart.
 
 ## Start
 

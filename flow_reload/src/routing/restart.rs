@@ -40,6 +40,7 @@ impl RequestRouter {
     /// Drives registered workers on the owning executor; statuses remain
     /// available even when every worker has finished.
     pub fn poll_workers(&mut self, cx: &mut Context<'_>) -> Poll<()> {
+        let _ = poll_cancelled_requests(cx);
         let mut pending = false;
         for worker in &mut self.workers {
             pending |= Pin::new(&mut worker.task).poll(cx).is_pending();
@@ -56,6 +57,18 @@ impl RequestRouter {
             .iter()
             .find(|worker| worker.id == id)
             .and_then(|worker| worker.task.status())
+    }
+    pub fn worker_activity_count(&self, id: WorkerId) -> Option<usize> {
+        self.workers
+            .iter()
+            .find(|worker| worker.id == id)
+            .map(|worker| worker.task.activity_count())
+    }
+    pub fn worker_activity_error(&self, id: WorkerId) -> Option<ServiceError> {
+        self.workers
+            .iter()
+            .find(|worker| worker.id == id)
+            .and_then(|worker| worker.task.activity_error())
     }
     pub fn worker_checkpoint(&self, id: WorkerId) -> Option<Checkpoint> {
         self.workers
@@ -90,6 +103,24 @@ impl RequestRouter {
         candidate: PreparedHandler,
         migrate: impl FnMut(WorkerId, &Checkpoint, ServiceKey) -> Result<Checkpoint, ServiceError> + 'a,
     ) -> Result<Restart<'a>, RouteError> {
+        self.restart_with_commit(candidate, migrate, || Ok(()))
+    }
+
+    /// Stops/joins roots and stages every new worker before calling commit once.
+    /// Success installs the staged generation without polling its handlers.
+    ///
+    /// The application owns exclusion, transactions, rollback and durable recovery.
+    /// commit must leave resources recoverable on Err; unknown outcomes must keep
+    /// resource access fenced. It must not invalidate staged service bindings.
+    /// It is synchronous: do not assume frame latency or crash-atomic installation
+    /// of both database state and the in-memory router. Interrupted/failed Restart
+    /// leaves admission paused; an unpolled commit is never invoked on Drop.
+    pub fn restart_with_commit<'a>(
+        &'a mut self,
+        candidate: PreparedHandler,
+        migrate: impl FnMut(WorkerId, &Checkpoint, ServiceKey) -> Result<Checkpoint, ServiceError> + 'a,
+        commit: impl FnOnce() -> Result<(), ServiceError> + 'a,
+    ) -> Result<Restart<'a>, RouteError> {
         if self.restarting {
             return Err(RouteError::RestartInProgress);
         }
@@ -100,6 +131,7 @@ impl RequestRouter {
             return Err(RouteError::StaleCandidate);
         }
         self.check_service(candidate.api.service)?;
+        crate::environment::check_bindings(&candidate.bindings, &self.resources)?;
         let accepting = self.accepting;
         self.accepting = false;
         self.restarting = true;
@@ -108,11 +140,12 @@ impl RequestRouter {
             router: self,
             candidate: Some(candidate),
             migrate: Box::new(migrate),
+            commit: Some(Box::new(commit)),
             accepting,
             finished: false,
         };
         let generations = std::iter::once(restart.router.active.clone())
-            .chain(restart.router.retired.iter().filter_map(Weak::upgrade))
+            .chain(restart.router.retired.iter().cloned())
             .collect::<Vec<_>>();
         for generation in generations {
             let controls = generation
@@ -150,12 +183,17 @@ pub struct Restart<'a> {
     router: &'a mut RequestRouter,
     candidate: Option<PreparedHandler>,
     migrate: Box<Migrator<'a>>,
+    commit: Option<Box<dyn FnOnce() -> Result<(), ServiceError> + 'a>>,
     accepting: bool,
     finished: bool,
 }
 
 impl Restart<'_> {
     fn cutover(&mut self) -> Result<u64, RouteError> {
+        crate::environment::check_bindings(
+            &self.candidate.as_ref().unwrap().bindings,
+            &self.router.resources,
+        )?;
         for worker in &self.router.workers {
             if worker.task.status() != Some(RunStatus::Done) {
                 return Err(RouteError::WorkerFailed(worker.id));
@@ -198,6 +236,9 @@ impl Restart<'_> {
             image: candidate.image,
             controls: RefCell::new(Vec::new()),
             completion: self.router.active.completion.clone(),
+            activity_failed: Cell::new(false),
+            environment: candidate.environment,
+            bindings: candidate.bindings,
         });
         let mut workers = Vec::new();
         for (worker, state) in self.router.workers.iter().zip(states) {
@@ -211,12 +252,23 @@ impl Restart<'_> {
                 task,
             });
         }
-        // No handler body has been polled yet. Every fallible preparation step
-        // succeeded; installing workers and admission now forms the cutover.
-        self.router
-            .retired
-            .retain(|generation| generation.strong_count() != 0);
-        self.router.retired.push(Rc::downgrade(&self.router.active));
+        crate::environment::check_bindings(&next.bindings, &self.router.resources)?;
+        // No business future has been polled. All fallible SDK preparation is
+        // finished. The application's transaction is the final fallible step.
+        let commit = self.commit.take().expect("host commit called once");
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(commit))
+            .unwrap_or(Err(ServiceError::PANICKED))
+            .map_err(RouteError::HostCommit)?;
+        if let Some(image) = &next.image {
+            image.activate();
+        }
+        self.router.retired.retain(|generation| {
+            generation.in_flight.get() != 0 || generation.activity_failed.get()
+        });
+        self.router.retired.push(self.router.active.clone());
+        if let Some(image) = &self.router.active.image {
+            image.retire();
+        }
         self.router.active = next;
         self.router.workers = workers;
         self.router.accepting = self.accepting;
@@ -233,7 +285,16 @@ impl Future for Restart<'_> {
         if self.router.in_flight() != 0 {
             return Poll::Pending;
         }
-        let result = self.cutover();
+        let failed = std::iter::once(self.router.active.clone())
+            .chain(self.router.retired.iter().cloned())
+            .find(|generation| generation.activity_failed.get());
+        let result = if let Some(generation) = failed {
+            Err(RouteError::ActivityFailed {
+                generation: generation.id,
+            })
+        } else {
+            self.cutover()
+        };
         self.finished = true;
         self.router.restarting = false;
         self.router.active.completion.borrow_mut().take();

@@ -35,7 +35,7 @@ edition = "2021"
 crate-type = ["cdylib"]
 
 [dependencies]
-flow_reload = { path = "../../flow_reload" }
+flow_reload = { path = "../../flow_reload", default-features = false }
 ```
 
 Add the crate to workspace members. Define service IDs, versions, operations and
@@ -81,11 +81,4 @@ owned handles; the socket itself never crosses the DLL boundary.
 See the detailed [routing](../docs_ja/HOST_RESOURCES_AND_ROUTING.md) and
 [Restart](../docs_ja/RESTART_AND_MIGRATION.md) contracts before integrating workers.
 
-## Compatibility API
-
-`FlowRunner`, `AppState`, `main!` and attached runtime helpers remain available.
-They use ABI v4, separately from Handler ABI 2. Start with their
-[compatibility samples](../examples/README.md), not a raw-context integration.
-All `with_context*` constructors are unsafe and require matching types, exclusive
-access and lifetime through every escaped access and destructor. The safe
-context forms of `main!` were removed.
+For static linking and feature selection, see [API consolidation](API_CONSOLIDATION.md).

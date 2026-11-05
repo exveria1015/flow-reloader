@@ -4,7 +4,7 @@
 
 | エラー・症状 | 確認と対処 |
 | --- | --- |
-| `Abi` / handler ABI mismatch | 同じ SDK で両側を再ビルド。Handler ABI は2、旧 AppState ABI は4 |
+| `Abi` / handler ABI mismatch | 同じ SDK で両側を再ビルド。Handler ABI は5、Services とタスク制御 ABI は2 |
 | `ContractMismatch` | 資源とハンドラーのサービス ID・版を合わせる。サービス本体の移行はアプリ側の責務 |
 | `StateSchemaMismatch` | Drain は同じスキーマが必要。形式変更はチェックポイント変換を伴う Restart へ |
 | `WrongRouter` / `StaleCandidate` | 対象 Router の現在世代から候補を準備し直す |
@@ -23,27 +23,12 @@ Drain で常駐ワーカーが旧コードのままなのは正常です。GUI �
 
 ホストが監視するパスとビルドログを確認します。Router 自体に監視機能はありません。
 `service_host` はメッセージ境界または処理の poll 中に変更を扱い、GUI はバックグラウンドでビルドします。
-旧サンプルホストは成果物を監視するため、対応する `target/hot-reload-build` へ手動再ビルドします。
-旧 `main!` のソース自動監視は Debug のみです。
+`dev-tools` の監視はホストが明示的に起動します。静的構成では監視・ビルドを行いません。
 
 Windows のアクセス拒否では、エラーに出た**パス**を確認してください。
 Cargo の出力先とユーザー一時領域に書き込み権限が必要です。DLL コピー先は現在の作業ディレクトリではなく
-`flow-reloader/<PID>/` です。権限と使用中プロセス・ファイルロックを確認し、使用中 DLL のコピーは削除しません。
+`flow-reloader/managed-v1/sessions/<SessionId>/copies/` です。権限と使用中プロセス・ファイルロックを確認し、使用中 DLL のコピーは削除しません。
 不完全な成果物は完全にビルドし直してから候補を準備します。
 
 GUI の HTML／CSS／JS はホストの埋め込みアセットです。変更後はホストを再ビルド・再起動してください。
 ホットリロード対象は Rust ロジック DLL です。
-
-## 旧 API
-
-- `AbiVersion` / `StateSize` / `AllocatorTag`: ABI v4 と AppState を両側で合わせて再ビルド。
-  Windows の旧ロジックには `flow_reload::allocator!()` が必要です。
-  置換候補の拒否では旧世代を維持するため、一律にプロセス再起動が必要という意味ではありません。
-- `InitFailed` / `InitError`: init の戻り値・panic と、unsafe コンテキストの型・排他性・
-  外部に逃げた参照を含む寿命を確認します。
-- `AsyncRequiresRun`: `run_once` は同期専用。用途に応じて `run`、所有する `start`、attached 実行を使います。
-- `AttachedUnavailable` / `AttachedAttachFailed`: async SDK ロジックと、ホストの runtime feature・
-  `run_attached_with_*` を合わせます。所有する `start` は旧サービス表を接続しません。
-
-KeepLoaded はタスクを停止したり不正な参照を直したりしません。
-[所有と借用](LIFETIME_REVIEW.md)、[DLL の回収条件](UNLOAD_SAFETY.md) も参照してください。

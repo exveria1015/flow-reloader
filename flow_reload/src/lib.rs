@@ -1,43 +1,53 @@
-mod attached;
-mod execution;
+//! Message-oriented hot reload with host-owned resources and explicit task lifetimes.
+mod activity;
+mod async_service;
+#[cfg(feature = "native")]
+mod cache;
+mod environment;
+mod generation;
+#[cfg(feature = "native")]
+mod native;
 mod request;
 mod resources;
+#[cfg(feature = "native")]
+mod retention;
 mod routing;
-mod runner;
-mod runtime;
+mod task;
+mod thread_service;
 
-pub use attached::{
-    attach_tokio_runtime, attached_runtime_available, clear_attached_host_waker,
-    set_attached_host_waker, spawn_detached_sleep, spawn_detached_tcp_request,
-    tokio_runtime_vtable, AttachedFutureTask, AttachedRuntimeGuard, AttachedSleep,
-    AttachedTcpRequest,
+pub use activity::{ChildStop, ManagedActivity, MAX_MANAGED_ACTIVITIES};
+pub use async_service::{
+    AsyncLimits, CancellationToken, HostServiceFuture, ServiceCall, MAX_ASYNC_BUFFER,
 };
-pub use execution::Execution;
-pub use hot_macro::{
-    hot_init, hot_reload, hot_swap, reload_direct, reload_handler, reload_init, reload_snapshot,
-    reloadable,
-};
+#[cfg(feature = "native")]
+pub use cache::{clean_cache, inspect_cache, CacheEntry, CacheOptions, CacheReport, CacheStatus};
+pub use environment::{HandlerEnvironment, InitData, InitPayload};
+pub use hot_macro::reload_handler;
 pub use interface::services::{
-    HandlerApi, HandlerHeader, HandlerRequest, HostServices, HostServicesVTable, ResourceId,
-    ServiceError, ServiceKey, ServiceResult, HANDLER_ABI_VERSION, SERVICES_ABI_VERSION,
+    ActivityHandle, ActivityVTable, AsyncOperationId, AsyncPolled, AsyncStarted, HandlerApi,
+    HandlerHeader, HandlerRequest, HostServices, HostServicesVTable, ResourceId, ServiceBinding,
+    ServiceError, ServiceKey, ServiceRequirement, ServiceResult, ACTIVITY_ABI_VERSION,
+    HANDLER_ABI_VERSION, MAX_INIT_BYTES, MAX_SERVICE_REQUIREMENTS, SERVICES_ABI_VERSION,
 };
-pub use interface::{
-    AppState, AttachRuntimeFn, AttachedFuture, AttachedFutureVTable, AttachedSupportedFn,
-    CartridgeState, FuncType, HostRuntimeVTable, HostWaker, HostWakerVTable, InitFn,
-    MakeAttachedFutureFn, Metadata, ResetAttachedFn, RunStatus, ABI_VERSION, CARTRIDGE_CAPACITY,
-};
+pub use interface::{HostWaker, HostWakerVTable, RunStatus, TaskHandle, TaskVTable};
+#[cfg(feature = "native")]
+pub use native::LoadError;
 pub use request::RequestContext;
 pub use resources::{HostResource, HostResources, Resource, Services};
-pub use routing::{
-    Checkpoint, GenerationBudget, PreparedHandler, RequestRouter, RequestTask, Restart, RouteError,
-    RouterOptions, WorkerId,
+#[cfg(feature = "native")]
+pub use retention::{
+    retention_snapshot, ArtifactId, CopyRemovalError, ImageOutcome, ImageRecord, ImageState,
+    RetentionSnapshot,
 };
-pub use runner::{collect_retired_libraries, FlowRunner, RunnerError, UnloadPolicy};
-pub use runtime::{RuntimeBridge, RuntimeHandle, StdRuntime};
-
-pub const ALLOCATOR_TAG_SYSTEM: u32 = 1;
+pub use routing::{
+    poll_cancelled_requests, Checkpoint, GenerationBudget, PreparedHandler, RequestRouter,
+    RequestTask, Restart, RouteError, RouterOptions, WorkerId,
+};
+pub use task::FfiFuture;
+pub use thread_service::{ServiceClient, ServiceWorker, ThreadService, ThreadServiceLimits};
 
 #[doc(hidden)]
 pub mod internal;
 
-mod macros;
+#[cfg(feature = "dev-tools")]
+pub mod development;

@@ -7,6 +7,8 @@ use std::ffi::c_void;
 use std::marker::PhantomData;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
+mod async_ops;
+use crate::{AsyncLimits, CancellationToken, HostServiceFuture};
 
 static NEXT_REGISTRY: AtomicU64 = AtomicU64::new(1);
 
@@ -16,17 +18,46 @@ static NEXT_REGISTRY: AtomicU64 = AtomicU64::new(1);
 pub trait HostResource: 'static {
     fn call(
         &mut self,
-        operation: u32,
-        input: &[u8],
-        output: &mut [u8],
-    ) -> Result<usize, ServiceError>;
+        _operation: u32,
+        _input: &[u8],
+        _output: &mut [u8],
+    ) -> Result<usize, ServiceError> {
+        Err(ServiceError::UNSUPPORTED_OPERATION)
+    }
+
+    /// Copy input and return an owned future. Polling must be nonblocking;
+    /// Ready certifies I/O quiescence, including after cooperative cancellation.
+    fn start_async(
+        &mut self,
+        _operation: u32,
+        _input: &[u8],
+        _cancel: CancellationToken,
+    ) -> Result<HostServiceFuture, ServiceError> {
+        Err(ServiceError::UNSUPPORTED_OPERATION)
+    }
 }
 
 trait ErasedResource {
+    fn start_async(
+        &self,
+        operation: u32,
+        input: &[u8],
+        cancel: CancellationToken,
+    ) -> Result<HostServiceFuture, ServiceError>;
     fn call(&self, operation: u32, input: &[u8], output: &mut [u8]) -> Result<usize, ServiceError>;
 }
 
 impl<T: HostResource> ErasedResource for RefCell<T> {
+    fn start_async(
+        &self,
+        operation: u32,
+        input: &[u8],
+        cancel: CancellationToken,
+    ) -> Result<HostServiceFuture, ServiceError> {
+        self.try_borrow_mut()
+            .map_err(|_| ServiceError::BUSY)?
+            .start_async(operation, input, cancel)
+    }
     fn call(&self, operation: u32, input: &[u8], output: &mut [u8]) -> Result<usize, ServiceError> {
         self.try_borrow_mut()
             .map_err(|_| ServiceError::BUSY)?
@@ -42,6 +73,7 @@ struct Slot {
 struct Registry {
     id: u64,
     slots: RefCell<Vec<Slot>>,
+    async_ops: async_ops::Operations,
 }
 
 /// A thread-bound registry independent of any logic generation. Service clients
@@ -57,13 +89,18 @@ impl Default for HostResources {
 
 impl HostResources {
     pub fn new() -> Self {
+        Self::with_async_limits(AsyncLimits::default()).expect("valid default async limits")
+    }
+    pub fn with_async_limits(limits: AsyncLimits) -> Result<Self, ServiceError> {
+        let limits = limits.validate()?;
         let id = NEXT_REGISTRY
             .try_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
             .expect("host registry ID space exhausted");
-        Self(Rc::new(Registry {
+        Ok(Self(Rc::new(Registry {
             id,
             slots: RefCell::new(Vec::new()),
-        }))
+            async_ops: async_ops::Operations::new(limits),
+        })))
     }
 
     pub fn register<T: HostResource>(&self, service: ServiceKey, value: T) -> Resource<T> {
@@ -95,7 +132,7 @@ impl HostResources {
         }
     }
 
-    /// Revokes future service calls. Existing host Resource<T> owners may keep
+    /// Revokes future service calls. Existing host `Resource<T>` owners may keep
     /// the underlying connection/data alive until they too are dropped.
     pub fn revoke(&self, id: ResourceId) -> bool {
         if id.registry != self.0.id {
@@ -118,6 +155,7 @@ impl HostResources {
             }
             removed
         };
+        self.0.async_ops.revoke(id);
         // Destructors may reenter the registry; do not hold its RefCell borrow.
         removed.is_some()
     }
@@ -338,4 +376,8 @@ static VTABLE: HostServicesVTable = HostServicesVTable {
     retain,
     release,
     call,
+    start_async: async_ops::start,
+    poll_async: async_ops::poll,
+    cancel_async: async_ops::cancel,
+    release_async: async_ops::release,
 };

@@ -1,8 +1,16 @@
 [package]
+publish = false
 name = "service_host"
 version = "0.1.0"
-edition = "2021"
+edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
-flow_reload = { path = "../../flow_reload" }
+flow_reload = { path = "../../flow_reload", default-features = false }
+service_logic = { path = "../service_logic", optional = true }
+
+[features]
+default = ["reload"]
+reload = ["flow_reload/dev-tools"]
+static-logic = ["dep:service_logic"]

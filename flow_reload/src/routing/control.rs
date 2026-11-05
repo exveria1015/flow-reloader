@@ -1,3 +1,5 @@
+use crate::activity::Entry;
+use crate::{ActivityHandle, MAX_MANAGED_ACTIVITIES};
 use crate::{ServiceError, ServiceKey};
 use interface::services::{
     HandlerHeader, HostTaskControl, HostTaskVTable, TASK_CONTROL_ABI_VERSION,
@@ -5,6 +7,8 @@ use interface::services::{
 use std::cell::{Cell, RefCell};
 use std::ffi::c_void;
 use std::rc::Rc;
+use std::sync::Arc;
+use std::task::Context;
 use std::task::Waker;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -24,15 +28,30 @@ pub(super) struct Control {
     pub schema: ServiceKey,
     pub max_bytes: usize,
     pub waker: RefCell<Option<Waker>>,
+    pub closing: Cell<bool>,
+    pub failure: Cell<Option<ServiceError>>,
+    activities: RefCell<Vec<Entry>>,
+    polling: Cell<usize>,
+    lease: Option<Arc<dyn Send + Sync>>,
 }
 impl Control {
-    pub fn new(schema: ServiceKey, checkpoint: Option<Checkpoint>, max_bytes: usize) -> Rc<Self> {
+    pub fn new(
+        schema: ServiceKey,
+        checkpoint: Option<Checkpoint>,
+        max_bytes: usize,
+        lease: Option<Arc<dyn Send + Sync>>,
+    ) -> Rc<Self> {
         Rc::new(Self {
             stop: Cell::new(false),
             checkpoint: RefCell::new(checkpoint),
             schema,
             max_bytes,
             waker: RefCell::new(None),
+            closing: Cell::new(false),
+            failure: Cell::new(None),
+            activities: RefCell::new(Vec::new()),
+            polling: Cell::new(0),
+            lease,
         })
     }
     pub fn stop(&self) {
@@ -42,11 +61,68 @@ impl Control {
             waker.wake();
         }
     }
+    pub fn close(&self) {
+        self.closing.set(true);
+        // The root is already terminal/cancelled. Do not wake its executor
+        // from completion or Drop; activity stop notifications run during polling.
+        self.stop.set(true);
+    }
+    pub fn activity_count(&self) -> usize {
+        self.activities.borrow().len() + self.polling.get()
+    }
+    pub fn poll_activities(&self, cx: &mut Context<'_>) -> bool {
+        // Do not hold a RefCell borrow over foreign callbacks. Registration during
+        // polling is bounded too; new entries are driven on the following poll.
+        let entries = std::mem::take(&mut *self.activities.borrow_mut());
+        self.polling.set(entries.len());
+        let mut pending = Vec::new();
+        let mut wake_root = false;
+        for mut entry in entries {
+            let (joined, error) = entry.poll(self.stop.get(), cx);
+            if let Some(error) = error {
+                if self.failure.get().is_none() {
+                    self.failure.set(Some(error));
+                    wake_root = true;
+                }
+                self.stop.set(true);
+            }
+            if !joined {
+                pending.push(entry);
+            }
+        }
+        self.polling.set(0);
+        self.activities.borrow_mut().extend(pending);
+        // User Wakers can panic. Restore ownership before notifying the root so
+        // recovery cannot accidentally lose unjoined registrations.
+        if wake_root {
+            let waker = self.waker.borrow().clone();
+            if let Some(waker) = waker {
+                waker.wake();
+            }
+        }
+        self.activity_count() == 0
+    }
     pub fn raw(self: &Rc<Self>) -> HostTaskControl {
         HostTaskControl {
             data: Rc::as_ptr(self).cast_mut().cast(),
             vtable: &VTABLE,
         }
+    }
+}
+unsafe extern "C" fn register_activity(data: *mut c_void, raw: ActivityHandle) -> u32 {
+    let control = &*data.cast::<Control>();
+    if control.stop.get() || control.closing.get() {
+        return ServiceError::REVOKED.0;
+    }
+    if control.activity_count() >= MAX_MANAGED_ACTIVITIES {
+        return ServiceError::BUSY.0;
+    }
+    match Entry::new(raw, control.lease.clone()) {
+        Ok(entry) => {
+            control.activities.borrow_mut().push(entry);
+            0
+        }
+        Err(error) => error.0,
     }
 }
 unsafe extern "C" fn retain(data: *mut c_void) -> *mut c_void {
@@ -89,4 +165,5 @@ static VTABLE: HostTaskVTable = HostTaskVTable {
     release,
     stop_requested: stopped,
     checkpoint,
+    register_activity,
 };
