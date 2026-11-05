@@ -1,0 +1,14 @@
+[package]
+name = "contracts_logic"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[features]
+version_two = []
+
+[dependencies]
+flow_reload = { path = "../../flow_reload" }

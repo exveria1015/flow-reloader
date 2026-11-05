@@ -15,6 +15,10 @@ Run commands from the workspace root with Rust/Cargo installed:
 ```sh
 cargo run -p service_host
 cargo run -p flow_reload --example restart
+cargo run -p flow_reload --example threaded_io
+cargo run -p flow_reload --example contracts
+cargo run -p db_migration_host
+cargo run -p bevy_game_host -- --verify
 cargo run -p tauri_tokio
 ```
 
@@ -24,6 +28,17 @@ Run one example at a time:
   `examples/service_logic/src/lib.rs`, then send another message on the same connection.
   Transport stays in the host; new requests use the new generation.
 - `restart`: a small static example of cooperative shutdown, checkpoint migration and load budgets.
+- `threaded_io`: two logic owner threads, two actual DLL generations and TCP I/O
+  on a bounded host worker; exits after verification. [Contracts](docs_ja/ASYNC_SERVICES_AND_THREADS.md).
+- `contracts`: native DLLs declaring multiple required services and typed initial
+  configuration; rejects missing contracts and malformed data before request execution.
+  [Contracts and scope](docs_ja/SERVICE_CONTRACTS_AND_INIT.md).
+- `db_migration_host`: real DLLs, compatible Drain and a breaking SQLite/host-cache
+  migration after worker shutdown; verifies rollback, retry and durable reopen.
+  Requires a C compiler for bundled SQLite. [Policy and recovery](docs_ja/HOST_RESOURCE_MIGRATION.md).
+- `bevy_game_host --verify`: a headless Bevy 0.20.1 game with real DLLs, frame-boundary
+  cutover, multi-frame worker Restart and stale job rejection (Rust 1.97.1+).
+  Without arguments, edit its logic's `STEP` to build in the background and Restart.
 - `tauri_tokio`: a Tauri GUI with an in-window Rust editor, Drain/Restart controls,
   counter and build diagnostics. Requires the platform's Tauri build prerequisites;
   no npm or Tauri CLI is needed. The package name is historical; its logic uses the message API.
@@ -37,10 +52,17 @@ or [日本語ドキュメント](docs_ja/README.md).
   finalization and callbacks, must follow the SDK contracts. Metadata validation
   does not isolate untrusted native code.
 - Host resources use service IDs/versions and copied byte buffers, rather than
-  sharing Rust objects across DLL ownership boundaries. Operations are short and synchronous.
+  sharing Rust objects across DLL ownership boundaries. Synchronous operations are short;
+  `call_async` waits on owned host I/O and joins cancellation before request completion.
 - Tasks and resource registries are bound to their owner thread. Hosts drive polling;
-  independent spawn tasks and callbacks are not automatically tracked or joined.
-- The message path uses **Handler ABI 2**, Services ABI 1 and task-control ABI 1.
+  `spawn_child` and `register_activity` join explicitly registered work before request
+  completion. Independent spawn tasks and callbacks are not automatically discovered.
+  Dropped requests with pending cleanup need owner-thread `poll_cancelled_requests`
+  (also driven by worker polling and Restart). See [managed activities](docs_ja/MANAGED_ACTIVITIES.md).
+- `restart_with_commit` stages all workers before a synchronous application commit
+  hook. Applications own resource exclusion, SQL rollback and durable recovery;
+  database commit and router installation are not one crash-atomic operation.
+- The message path uses **Handler ABI 5**, Services ABI 2 and task-control ABI 2.
   Rebuild host and logic together after ABI changes.
 - Native images default to **KeepLoaded**, including abandoned or invalid loaded
   candidates. Code and temporary copies can accumulate. This preserves code lifetime,
@@ -48,8 +70,11 @@ or [日本語ドキュメント](docs_ja/README.md).
 - `RouterOptions` defaults to 32 cumulative load attempts per shared
   `GenerationBudget` and 1 MiB per worker checkpoint. Failed native loads consume
   budget too; completion does not refund it. Restart the development process when exhausted.
-- DLL copies live under the user's temporary directory at `flow-reloader/<PID>/`.
-  They may remain after exit; remove them only after the corresponding process has ended.
+- DLL copies live under `flow-reloader/managed-v1/sessions/<SessionId>/copies/`
+  in the user's temporary directory. `retention_snapshot()` reports SDK-held images;
+  `cargo run -p flow_reload --bin flow-cache -- inspect` reports copy files.
+  `clean --apply` removes eligible exited sessions; legacy PID directories are listed only.
+  See [operations and limits](docs_ja/RETENTION_AND_CLEANUP.md).
 
 The older `FlowRunner` / `AppState` / attached-runtime API remains available with
 **ABI v4**. Its sync, snapshot and Tokio/async-std/smol examples are compatibility

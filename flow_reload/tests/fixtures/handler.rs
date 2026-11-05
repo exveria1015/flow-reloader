@@ -11,6 +11,10 @@ static API: HandlerApi = HandlerApi {
     header: HandlerHeader {
         abi_version: if cfg!(bad_abi) {
             999
+        } else if cfg!(legacy_handler_abi) {
+            2
+        } else if cfg!(previous_handler_abi) {
+            3
         } else {
             HANDLER_ABI_VERSION
         },
@@ -23,10 +27,21 @@ static API: HandlerApi = HandlerApi {
     } else {
         ServiceKey::new(0, 0)
     },
+    required_services: [ServiceRequirement::EMPTY; MAX_SERVICE_REQUIREMENTS],
+    required_count: 0,
+    init_schema: ServiceKey::new(0, 0),
+    validate_init: None,
 };
 
 #[no_mangle]
 pub extern "C" fn hot_handler_api() -> *const HandlerApi {
+    if cfg!(header_only_v4) {
+        static OLD: HandlerHeader = HandlerHeader {
+            abi_version: 4,
+            struct_size: 8,
+        };
+        return (&OLD as *const HandlerHeader).cast();
+    }
     &API
 }
 
@@ -80,6 +95,18 @@ unsafe extern "C" fn make(raw: *const HandlerRequest) -> AttachedFuture {
 
 unsafe extern "C" fn poll(data: *mut c_void, waker: *const HostWaker) -> RunStatus {
     let task = &mut *data.cast::<Task>();
+    if cfg!(managed_activity) {
+        if std::mem::take(&mut task.first) {
+            let activity = native_activity::make(task.host, task.resource, task.service);
+            let result = ((*task.control.vtable).register_activity)(task.control.data, activity);
+            if result != 0 {
+                ((*activity.vtable).destroy)(activity.data);
+                return RunStatus::Error;
+            }
+            return RunStatus::Pending;
+        }
+        return RunStatus::Done;
+    }
     if cfg!(restart_worker) {
         let value = if cfg!(version_two) {
             u16::from_le_bytes(task.state[..2].try_into().unwrap())
@@ -155,3 +182,150 @@ static VTABLE: AttachedFutureVTable = AttachedFutureVTable {
     poll,
     drop: destroy,
 };
+
+mod native_activity {
+    use super::*;
+    use std::sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    };
+    use std::thread::{self, JoinHandle, ThreadId};
+
+    struct Signal {
+        entered: AtomicBool,
+        release: AtomicBool,
+        returned: AtomicBool,
+    }
+    struct Subscription {
+        host: HostServices,
+        resource: ResourceId,
+        service: ServiceKey,
+        owner: ThreadId,
+        stop_attempted: bool,
+        stopped: bool,
+        signal: Arc<Signal>,
+        thread: Option<JoinHandle<()>>,
+    }
+    pub unsafe fn make(
+        host: HostServices,
+        resource: ResourceId,
+        service: ServiceKey,
+    ) -> ActivityHandle {
+        let host = HostServices {
+            data: ((*host.vtable).retain)(host.data),
+            ..host
+        };
+        ActivityHandle {
+            data: Box::into_raw(Box::new(Subscription {
+                host,
+                resource,
+                service,
+                owner: thread::current().id(),
+                stop_attempted: false,
+                stopped: false,
+                signal: Arc::new(Signal {
+                    entered: AtomicBool::new(false),
+                    release: AtomicBool::new(false),
+                    returned: AtomicBool::new(false),
+                }),
+                thread: None,
+            }))
+            .cast(),
+            vtable: &ACTIVITY,
+        }
+    }
+    impl Subscription {
+        unsafe fn log(&self, message: &[u8]) {
+            assert_eq!(self.owner, thread::current().id());
+            let result = ((*self.host.vtable).call)(
+                self.host.data,
+                self.resource,
+                self.service,
+                0,
+                message.as_ptr(),
+                message.len(),
+                std::ptr::null_mut(),
+                0,
+            );
+            assert_eq!(result.status, 0);
+        }
+    }
+    // Simulates an external event source executing a DLL callback. It only owns
+    // synchronized DLL-local state, never a thread-bound SDK pointer/service.
+    fn callback(signal: Arc<Signal>) {
+        signal.entered.store(true, Ordering::Release);
+        while !signal.release.load(Ordering::Acquire) {
+            thread::yield_now();
+        }
+        signal.returned.store(true, Ordering::Release);
+    }
+    unsafe extern "C" fn stop(data: *mut c_void) -> u32 {
+        let subscription = &mut *data.cast::<Subscription>();
+        subscription.log(b"unsubscribe");
+        if cfg!(activity_stop_fails) && !subscription.stop_attempted {
+            subscription.stop_attempted = true;
+            return ServiceError::FAILED.0;
+        }
+        subscription.stopped = true;
+        0
+    }
+    unsafe extern "C" fn join(data: *mut c_void, _: *const HostWaker) -> RunStatus {
+        let subscription = &mut *data.cast::<Subscription>();
+        assert_eq!(subscription.owner, thread::current().id());
+        if subscription.thread.is_none() {
+            if subscription.stopped {
+                return RunStatus::Done;
+            }
+            let signal = subscription.signal.clone();
+            subscription.thread = Some(thread::spawn(move || callback(signal)));
+        }
+        if !subscription.signal.entered.load(Ordering::Acquire) {
+            return RunStatus::Pending;
+        }
+        subscription.log(b"callback_active");
+        let mut gate = [0];
+        let result = ((*subscription.host.vtable).call)(
+            subscription.host.data,
+            subscription.resource,
+            subscription.service,
+            1,
+            std::ptr::null(),
+            0,
+            gate.as_mut_ptr(),
+            1,
+        );
+        assert_eq!(result.status, 0);
+        if subscription.stopped && gate[0] != 0 {
+            subscription.signal.release.store(true, Ordering::Release);
+        }
+        if !subscription.thread.as_ref().unwrap().is_finished() {
+            return RunStatus::Pending;
+        }
+        let result = subscription.thread.take().unwrap().join();
+        assert!(subscription.signal.returned.load(Ordering::Acquire));
+        subscription.log(b"callback_joined");
+        if result.is_ok() {
+            RunStatus::Done
+        } else {
+            RunStatus::Error
+        }
+    }
+    unsafe extern "C" fn destroy(data: *mut c_void) {
+        let subscription = Box::from_raw(data.cast::<Subscription>());
+        assert!(
+            subscription.thread.is_none(),
+            "destroyed before external callback joined"
+        );
+        subscription.log(b"activity_drop");
+        ((*subscription.host.vtable).release)(subscription.host.data);
+    }
+    static ACTIVITY: ActivityVTable = ActivityVTable {
+        header: HandlerHeader {
+            abi_version: ACTIVITY_ABI_VERSION,
+            struct_size: std::mem::size_of::<ActivityVTable>() as u32,
+        },
+        request_stop: stop,
+        poll_join: join,
+        destroy,
+    };
+}

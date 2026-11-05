@@ -20,6 +20,11 @@ $taskGroups = @(
     @{ Name = 'host-resources'; Args = @('--test', 'host_resources') },
     @{ Name = 'request-routing'; Args = @('--test', 'request_routing') },
     @{ Name = 'restart'; Args = @('--test', 'restart') },
+    @{ Name = 'host-commit'; Args = @('--test', 'host_commit') },
+    @{ Name = 'managed-activities'; Args = @('--test', 'managed_activities') },
+    @{ Name = 'async-services'; Args = @('--test', 'async_services') },
+    @{ Name = 'threaded-services'; Args = @('--test', 'threaded_services') },
+    @{ Name = 'service-contracts'; Args = @('--test', 'service_contracts') },
     @{ Name = 'release-main'; Args = @('--release', '--test', 'release_main') }
 )
 
@@ -41,6 +46,14 @@ try {
         'interface/src/services.rs', 'hot_macro/src/handler.rs',
         'flow_reload/src/routing/control.rs', 'flow_reload/src/routing/limits.rs',
         'flow_reload/src/routing/restart.rs', 'flow_reload/tests/restart.rs',
+        'flow_reload/src/retention.rs', 'flow_reload/src/cache.rs',
+        'flow_reload/src/cache/session.rs', 'flow_reload/src/cache/permissions.rs',
+        'flow_reload/tests/host_commit.rs',
+        'flow_reload/src/activity.rs', 'flow_reload/tests/managed_activities.rs',
+        'flow_reload/src/async_service.rs', 'flow_reload/src/resources/async_ops.rs',
+        'flow_reload/src/thread_service.rs', 'flow_reload/tests/async_services.rs',
+        'flow_reload/tests/threaded_services.rs',
+        'flow_reload/src/environment.rs', 'flow_reload/tests/service_contracts.rs',
         'flow_reload/tests/host_resources.rs', 'flow_reload/tests/request_routing.rs',
         'Cargo.lock'
     )

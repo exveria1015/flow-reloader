@@ -3,6 +3,7 @@ use crate::{
     AttachedFutureTask, HandlerApi, HandlerHeader, HandlerRequest, HostResources, ResourceId,
     RunStatus, RunnerError, ServiceError, ServiceKey, HANDLER_ABI_VERSION,
 };
+use crate::{HandlerEnvironment, ServiceBinding};
 use interface::services::HandlerApiFn;
 use std::cell::{Cell, RefCell};
 use std::fmt;
@@ -26,6 +27,17 @@ static NEXT_ROUTER: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Debug)]
 pub enum RouteError {
+    InvalidEnvironment,
+    MissingService {
+        binding: u64,
+        expected: ServiceKey,
+    },
+    InitSchemaMismatch {
+        expected: ServiceKey,
+        found: ServiceKey,
+    },
+    InitData(ServiceError),
+    HostCommit(ServiceError),
     Load(RunnerError),
     Abi {
         version: u32,
@@ -55,11 +67,26 @@ pub enum RouteError {
         error: ServiceError,
     },
     RestartInProgress,
+    ActivityFailed {
+        generation: u64,
+    },
 }
 
 impl fmt::Display for RouteError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::InvalidEnvironment => {
+                write!(f, "invalid service bindings in handler environment")
+            }
+            Self::MissingService { binding, expected } => {
+                write!(f, "missing service binding {binding}: {expected:?}")
+            }
+            Self::InitSchemaMismatch { expected, found } => write!(
+                f,
+                "initialization schema mismatch: expected {expected:?}, found {found:?}"
+            ),
+            Self::InitData(error) => write!(f, "initialization data rejected: {error}"),
+            Self::HostCommit(error) => write!(f, "host resource commit failed: {error}"),
             Self::Load(error) => write!(f, "handler load failed: {error}"),
             Self::Abi { version, size } => {
                 write!(f, "handler ABI mismatch: version {version}, size {size}")
@@ -91,6 +118,9 @@ impl fmt::Display for RouteError {
                 write!(f, "worker {} migration failed: {error}", worker.0)
             }
             Self::RestartInProgress => write!(f, "restart is already in progress"),
+            Self::ActivityFailed { generation } => {
+                write!(f, "registered activity failed in generation {generation}")
+            }
         }
     }
 }
@@ -99,6 +129,7 @@ impl std::error::Error for RouteError {
         match self {
             Self::Load(error) => Some(error),
             Self::Resource(error) => Some(error),
+            Self::HostCommit(error) => Some(error),
             _ => None,
         }
     }
@@ -111,6 +142,17 @@ struct Generation {
     image: Option<GenerationOwner>,
     controls: RefCell<Vec<Weak<Control>>>,
     completion: Rc<RefCell<Option<std::task::Waker>>>,
+    activity_failed: Cell<bool>,
+    environment: HandlerEnvironment,
+    bindings: Vec<ServiceBinding>,
+}
+
+impl Drop for RequestRouter {
+    fn drop(&mut self) {
+        if let Some(image) = &self.active.image {
+            image.retire();
+        }
+    }
 }
 
 struct AdmissionCount {
@@ -134,6 +176,8 @@ pub struct PreparedHandler {
     base: u64,
     api: HandlerApi,
     image: Option<GenerationOwner>,
+    environment: HandlerEnvironment,
+    bindings: Vec<ServiceBinding>,
 }
 
 impl PreparedHandler {
@@ -151,7 +195,7 @@ pub struct RequestRouter {
     id: u64,
     resources: HostResources,
     active: Rc<Generation>,
-    retired: Vec<Weak<Generation>>,
+    retired: Vec<Rc<Generation>>,
     accepting: bool,
     options: RouterOptions,
     workers: Vec<Worker>,
@@ -186,12 +230,24 @@ impl RequestRouter {
         resources: HostResources,
         options: RouterOptions,
     ) -> Result<Self, RouteError> {
+        Self::load_with_environment(path, resources, HandlerEnvironment::default(), options)
+    }
+
+    /// # Safety
+    /// Same trusted native code contract as load. Init validators must be pure;
+    /// factories must copy bindings and initial data before returning.
+    pub unsafe fn load_with_environment(
+        path: impl AsRef<Path>,
+        resources: HostResources,
+        environment: HandlerEnvironment,
+        options: RouterOptions,
+    ) -> Result<Self, RouteError> {
         if options.max_checkpoint_bytes == 0 {
             return Err(RouteError::InvalidLimits);
         }
         options.generations.reserve()?;
         let (api, image) = load(path.as_ref(), 1)?;
-        Self::create(api, Some(image), resources, options)
+        Self::create(api, Some(image), resources, options, environment)
     }
 
     /// # Safety
@@ -201,12 +257,24 @@ impl RequestRouter {
         resources: HostResources,
         options: RouterOptions,
     ) -> Result<Self, RouteError> {
+        Self::from_api_with_environment(api, resources, HandlerEnvironment::default(), options)
+    }
+
+    /// # Safety
+    /// Same static callback lifetime contract as from_api, also covering the
+    /// pure initialization validator and registered activity callbacks.
+    pub unsafe fn from_api_with_environment(
+        api: HandlerApi,
+        resources: HostResources,
+        environment: HandlerEnvironment,
+        options: RouterOptions,
+    ) -> Result<Self, RouteError> {
         validate(api)?;
         if options.max_checkpoint_bytes == 0 {
             return Err(RouteError::InvalidLimits);
         }
         options.generations.reserve()?;
-        Self::create(api, None, resources, options)
+        Self::create(api, None, resources, options, environment)
     }
 
     fn create(
@@ -214,11 +282,16 @@ impl RequestRouter {
         image: Option<GenerationOwner>,
         resources: HostResources,
         options: RouterOptions,
+        environment: HandlerEnvironment,
     ) -> Result<Self, RouteError> {
         validate(api)?;
+        let bindings = crate::environment::negotiate(&api, &environment, &resources)?;
         let id = NEXT_ROUTER
             .try_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
             .map_err(|_| RouteError::GenerationExhausted)?;
+        if let Some(image) = &image {
+            image.activate();
+        }
         Ok(Self {
             id,
             resources,
@@ -229,6 +302,9 @@ impl RequestRouter {
                 in_flight: Cell::new(0),
                 controls: RefCell::new(Vec::new()),
                 completion: Rc::new(RefCell::new(None)),
+                activity_failed: Cell::new(false),
+                environment,
+                bindings,
             }),
             retired: Vec::new(),
             accepting: true,
@@ -243,6 +319,15 @@ impl RequestRouter {
     /// # Safety
     /// The candidate must obey load's native code, initialization and ABI contracts.
     pub unsafe fn prepare(&self, path: impl AsRef<Path>) -> Result<PreparedHandler, RouteError> {
+        self.prepare_with_environment(path, self.active.environment.clone())
+    }
+    /// # Safety
+    /// Same native code and pure validation contract as load_with_environment.
+    pub unsafe fn prepare_with_environment(
+        &self,
+        path: impl AsRef<Path>,
+        environment: HandlerEnvironment,
+    ) -> Result<PreparedHandler, RouteError> {
         let next = self
             .active
             .id
@@ -250,30 +335,46 @@ impl RequestRouter {
             .ok_or(RouteError::GenerationExhausted)?;
         self.options.generations.reserve()?;
         let (api, image) = load(path.as_ref(), next)?;
-        self.candidate(api, Some(image))
+        self.candidate(api, Some(image), environment)
     }
 
     /// # Safety
     /// The statically supplied callbacks must obey from_api's lifetime contract.
     pub unsafe fn prepare_api(&self, api: HandlerApi) -> Result<PreparedHandler, RouteError> {
+        self.prepare_api_with_environment(api, self.active.environment.clone())
+    }
+    /// # Safety
+    /// Same static callback and validator contract as from_api_with_environment.
+    pub unsafe fn prepare_api_with_environment(
+        &self,
+        api: HandlerApi,
+        environment: HandlerEnvironment,
+    ) -> Result<PreparedHandler, RouteError> {
         validate(api)?;
         self.check_service(api.service)?;
         self.options.generations.reserve()?;
-        self.candidate(api, None)
+        self.candidate(api, None, environment)
     }
 
     fn candidate(
         &self,
         api: HandlerApi,
         image: Option<GenerationOwner>,
+        environment: HandlerEnvironment,
     ) -> Result<PreparedHandler, RouteError> {
         validate(api)?;
         self.check_service(api.service)?;
+        let bindings = crate::environment::negotiate(&api, &environment, &self.resources)?;
+        if let Some(image) = &image {
+            image.prepared();
+        }
         Ok(PreparedHandler {
             router: self.id,
             base: self.active.id,
             api,
             image,
+            environment,
+            bindings,
         })
     }
 
@@ -297,11 +398,15 @@ impl RequestRouter {
             return Err(RouteError::StaleCandidate);
         }
         self.check_service(candidate.api.service)?;
+        crate::environment::check_bindings(&candidate.bindings, &self.resources)?;
         let id = self
             .active
             .id
             .checked_add(1)
             .ok_or(RouteError::GenerationExhausted)?;
+        if let Some(image) = &candidate.image {
+            image.activate();
+        }
         let next = Rc::new(Generation {
             id,
             api: candidate.api,
@@ -309,10 +414,17 @@ impl RequestRouter {
             in_flight: Cell::new(0),
             controls: RefCell::new(Vec::new()),
             completion: self.active.completion.clone(),
+            activity_failed: Cell::new(false),
+            environment: candidate.environment,
+            bindings: candidate.bindings,
         });
-        self.retired
-            .retain(|generation| generation.strong_count() != 0);
-        self.retired.push(Rc::downgrade(&self.active));
+        self.retired.retain(|generation| {
+            generation.in_flight.get() != 0 || generation.activity_failed.get()
+        });
+        self.retired.push(self.active.clone());
+        if let Some(image) = &self.active.image {
+            image.retire();
+        }
         self.active = next;
         Ok(id)
     }
@@ -331,6 +443,7 @@ impl RequestRouter {
         input: &[u8],
         checkpoint: Option<Checkpoint>,
     ) -> Result<RequestTask, RouteError> {
+        crate::environment::check_bindings(&generation.bindings, &self.resources)?;
         let service = self
             .resources
             .service(resource)
@@ -351,6 +464,7 @@ impl RequestRouter {
             generation.api.state_schema,
             checkpoint.clone(),
             self.options.max_checkpoint_bytes,
+            generation.image.as_ref().map(GenerationOwner::lease),
         );
         let (state_schema, state) = checkpoint
             .as_ref()
@@ -367,6 +481,26 @@ impl RequestRouter {
             state_schema,
             state: state.as_ptr(),
             state_len: state.len(),
+            bindings: generation.bindings.as_ptr(),
+            bindings_len: generation.bindings.len(),
+            init_schema: generation
+                .environment
+                .initial
+                .as_ref()
+                .map(|data| data.schema)
+                .unwrap_or(ServiceKey::new(0, 0)),
+            init: generation
+                .environment
+                .initial
+                .as_ref()
+                .map(|data| data.bytes.as_ptr())
+                .unwrap_or(std::ptr::null()),
+            init_len: generation
+                .environment
+                .initial
+                .as_ref()
+                .map(|data| data.bytes.len())
+                .unwrap_or(0),
         };
         generation.in_flight.set(count);
         let mut admission = AdmissionCount {
@@ -389,6 +523,8 @@ impl RequestRouter {
             resource,
             status: None,
             control,
+            root_status: None,
+            detached: false,
         })
     }
 
@@ -416,11 +552,12 @@ impl RequestRouter {
         self.active.api.service
     }
 
-    /// Counts managed unfinished requests, not escaped callbacks or retained DLLs.
+    /// Counts unfinished managed roots, including their registered activities
+    /// and cancelled requests whose asynchronous cleanup has not joined yet.
     pub fn in_flight(&self) -> usize {
         self.retired
             .iter()
-            .filter_map(Weak::upgrade)
+            .cloned()
             .fold(self.active.in_flight.get(), |count, generation| {
                 count.saturating_add(generation.in_flight.get())
             })
@@ -435,14 +572,32 @@ impl RequestRouter {
         }
         Ok(())
     }
+
+    /// Explicit application acknowledgement after observing/reconciling an activity
+    /// failure. Refuses while that generation has unfinished roots or cleanup.
+    /// Does not restart failed workers, resume admission or undo external effects.
+    pub fn acknowledge_activity_failure(&mut self, generation: u64) -> bool {
+        std::iter::once(&self.active)
+            .chain(&self.retired)
+            .find(|entry| entry.id == generation && entry.in_flight.get() == 0)
+            .is_some_and(|entry| entry.activity_failed.replace(false))
+    }
 }
 
+/// Thread-bound root execution, including registered cleanup.
+///
+/// ```compile_fail
+/// fn require_send<T: Send>() {}
+/// require_send::<flow_reload::RequestTask>();
+/// ```
 pub struct RequestTask {
     task: Option<AttachedFutureTask>,
     generation: Rc<Generation>,
     resource: ResourceId,
     status: Option<RunStatus>,
     control: Rc<Control>,
+    root_status: Option<RunStatus>,
+    detached: bool,
 }
 
 impl RequestTask {
@@ -456,10 +611,18 @@ impl RequestTask {
         self.status
     }
 
-    /// Destroys this request future. Independent tasks and side effects are not
-    /// rolled back. No request is automatically retried.
-    pub fn cancel(mut self) {
-        self.finish(RunStatus::Error);
+    /// Destroys the root future synchronously. Registered activities are stopped
+    /// and joined by poll_cancelled_requests (also driven by the router/Restart).
+    /// No request is replayed and external effects are not rolled back.
+    pub fn cancel(self) {
+        drop(self);
+    }
+
+    pub fn activity_count(&self) -> usize {
+        self.control.activity_count()
+    }
+    pub fn activity_error(&self) -> Option<ServiceError> {
+        self.control.failure.get()
     }
 
     fn finish(&mut self, status: RunStatus) {
@@ -467,6 +630,9 @@ impl RequestTask {
             self.control.waker.borrow_mut().take();
             self.task = None;
             self.status = Some(status);
+            if self.control.failure.get().is_some() {
+                self.generation.activity_failed.set(true);
+            }
             self.generation
                 .in_flight
                 .set(self.generation.in_flight.get() - 1);
@@ -484,19 +650,121 @@ impl Future for RequestTask {
             return Poll::Ready(status);
         }
         *self.control.waker.borrow_mut() = Some(cx.waker().clone());
-        match Pin::new(self.task.as_mut().unwrap()).poll(cx) {
-            Poll::Pending => Poll::Pending,
-            Poll::Ready(status) => {
-                self.finish(status);
-                Poll::Ready(status)
+        if self.root_status.is_none() {
+            if let Poll::Ready(status) = Pin::new(self.task.as_mut().unwrap()).poll(cx) {
+                self.task = None;
+                self.root_status = Some(status);
+                self.control.close();
             }
         }
+        let joined = self.control.poll_activities(cx);
+        if let Some(root) = self.root_status {
+            if joined {
+                let status = if self.control.failure.get().is_some() {
+                    RunStatus::Error
+                } else {
+                    root
+                };
+                self.finish(status);
+                return Poll::Ready(status);
+            }
+        }
+        Poll::Pending
     }
 }
 impl Drop for RequestTask {
     fn drop(&mut self) {
-        self.finish(RunStatus::Error);
+        if self.status.is_some() || self.detached {
+            return;
+        }
+        self.task = None;
+        self.control.close();
+        self.control.waker.borrow_mut().take();
+        if self.control.activity_count() == 0 {
+            self.finish(RunStatus::Error);
+        } else {
+            let cancelled = CancelledRequest {
+                generation: self.generation.clone(),
+                control: self.control.clone(),
+                finished: false,
+            };
+            // Try-with also covers cancellation during TLS destruction. Retain
+            // the owner if this thread can no longer service its cleanup queue.
+            let mut owned = Some(cancelled);
+            let _ = CANCELLED.try_with(|queue| queue.borrow_mut().push(owned.take().unwrap()));
+            if let Some(cancelled) = owned {
+                std::mem::forget(cancelled);
+            }
+            self.detached = true;
+            let waker = self.generation.completion.borrow().clone();
+            if let Some(waker) = waker {
+                waker.wake();
+            }
+        }
     }
+}
+
+thread_local! { static CANCELLED: RefCell<Vec<CancelledRequest>> = const { RefCell::new(Vec::new()) }; }
+struct CancelledRequest {
+    generation: Rc<Generation>,
+    control: Rc<Control>,
+    finished: bool,
+}
+impl Drop for CancelledRequest {
+    fn drop(&mut self) {
+        if !self.finished {
+            // Thread exit/abandonment cannot prove join. Retain the control and
+            // generation instead of destroying callback-owned state prematurely.
+            std::mem::forget(self.control.clone());
+            std::mem::forget(self.generation.clone());
+        }
+    }
+}
+
+struct CancelledBatch(Vec<CancelledRequest>);
+impl Drop for CancelledBatch {
+    fn drop(&mut self) {
+        // Restore not-yet-joined requests even if an executor Waker unwinds.
+        let _ = CANCELLED.try_with(|queue| queue.borrow_mut().append(&mut self.0));
+    }
+}
+
+/// Drives owner-thread cleanup for cancelled/dropped requests, even after their
+/// router is dropped. Pending cleanup remains counted and retains its generation.
+/// Call on the original owner thread; no blocking join or automatic thread spawn.
+pub fn poll_cancelled_requests(cx: &mut Context<'_>) -> Poll<()> {
+    let mut batch =
+        CancelledBatch(CANCELLED.with(|queue| std::mem::take(&mut *queue.borrow_mut())));
+    batch.0.retain_mut(|request| {
+        if request.finished {
+            return false;
+        }
+        if request.control.poll_activities(cx) {
+            if request.control.failure.get().is_some() {
+                request.generation.activity_failed.set(true);
+            }
+            request
+                .generation
+                .in_flight
+                .set(request.generation.in_flight.get() - 1);
+            request.finished = true;
+            let waker = request.generation.completion.borrow().clone();
+            if let Some(waker) = waker {
+                waker.wake();
+            }
+            false
+        } else {
+            true
+        }
+    });
+    drop(batch);
+    CANCELLED.with(|queue| {
+        if queue.borrow().is_empty() {
+            Poll::Ready(())
+        } else {
+            Poll::Pending
+        }
+    })
 }
 
 fn validate(api: HandlerApi) -> Result<(), RouteError> {
@@ -518,7 +786,7 @@ fn validate(api: HandlerApi) -> Result<(), RouteError> {
     {
         return Err(RouteError::InvalidApi);
     }
-    Ok(())
+    crate::environment::validate_manifest(&api)
 }
 
 unsafe fn load(path: &Path, generation: u64) -> Result<(HandlerApi, GenerationOwner), RouteError> {

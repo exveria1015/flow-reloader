@@ -72,7 +72,7 @@ DLL コピー先はユーザー一時領域の `flow-reloader/<PID>/`。起動�
 - `examples/tauri_tokio/src-tauri/gen/schemas/`: tauri-build の生成物。Git 管理から除外し、ビルド時に再生成する。
 - `examples/tauri_tokio/src-tauri/src/main.rs`: Tauri command とアプリ終了時のスレッド join。
 - `examples/tauri_tokio/src-tauri/src/engine.rs`: バックグラウンドビルド、ソース監視、受付切り替え、ホスト画面資源。
-- `examples/tauri_tokio_logic/src/lib.rs`: Handler ABI 2 の async ハンドラー。旧 AppState／attached ランタイムには依存しない。
+- `examples/tauri_tokio_logic/src/lib.rs`: Handler ABI 5 の async ハンドラー。旧 AppState／attached ランタイムには依存しない。
 
 SDK のサービス操作は短い同期処理。時計と表示データをホストへ問い合わせ、ローカル実行ループが16msごとに Future を poll する。
 ソース保存先はこのロジックファイルに固定。ローカルの信頼済み Rust コードを実行する開発サンプルとして使う。

@@ -1,0 +1,10 @@
+[package]
+name = "bevy_game_protocol"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+
+[dependencies]
+flow_reload = { path = "../../flow_reload" }
+serde = { version = "1", features = ["derive"] }
+

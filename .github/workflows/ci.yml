@@ -70,8 +70,24 @@ jobs:
         run: cargo clippy -p interface -p hot_macro -p flow_reload --all-targets --all-features -- -D warnings
       - name: Core tests (default features)
         run: cargo test -p interface -p hot_macro -p flow_reload
+      - name: Cache retention and separate host/cleaner processes
+        run: cargo test -p flow_reload --test cache_lifecycle -- --test-threads=1
       - name: Workspace tests without the GUI application
         run: cargo test --workspace --exclude tauri_tokio --all-features
+      - name: Native asynchronous I/O and multiple owner threads
+        run: cargo test -p flow_reload --test native_threaded_io -- --ignored --test-threads=1
+      - name: Native multi-service contracts and typed initialization
+        run: |
+          cargo clippy -p contracts_logic --all-targets --all-features -- -D warnings
+          cargo test -p flow_reload --test native_contracts -- --ignored --test-threads=1
+      - name: Host resource and SQLite migration
+        run: |
+          cargo clippy -p db_migration_host -p db_migration_logic --all-targets --all-features -- -D warnings
+          cargo test -p db_migration_host --test native_migration -- --ignored --test-threads=1
+      - name: Bevy game lints and native frame integration
+        run: |
+          cargo clippy -p bevy_game_host -p bevy_game_logic -p bevy_game_protocol --all-targets --all-features -- -D warnings
+          cargo test -p bevy_game_host --test native_game -- --ignored --test-threads=1
       - name: Release tests and macro expansion
         run: cargo test -p interface -p hot_macro -p flow_reload --release --all-features
       - name: Individual runtime features

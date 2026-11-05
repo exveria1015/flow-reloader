@@ -84,7 +84,7 @@ See the detailed [routing](../docs_ja/HOST_RESOURCES_AND_ROUTING.md) and
 ## Compatibility API
 
 `FlowRunner`, `AppState`, `main!` and attached runtime helpers remain available.
-They use ABI v4, separately from Handler ABI 2. Start with their
+They use ABI v4, separately from Handler ABI 5. Start with their
 [compatibility samples](../examples/README.md), not a raw-context integration.
 All `with_context*` constructors are unsafe and require matching types, exclusive
 access and lifetime through every escaped access and destructor. The safe

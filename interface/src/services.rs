@@ -2,9 +2,56 @@
 use crate::AttachedFuture;
 use std::ffi::c_void;
 
-pub const SERVICES_ABI_VERSION: u32 = 1;
-pub const HANDLER_ABI_VERSION: u32 = 2;
-pub const TASK_CONTROL_ABI_VERSION: u32 = 1;
+pub const SERVICES_ABI_VERSION: u32 = 2;
+pub const HANDLER_ABI_VERSION: u32 = 5;
+pub const TASK_CONTROL_ABI_VERSION: u32 = 2;
+pub const ACTIVITY_ABI_VERSION: u32 = 1;
+pub const MAX_SERVICE_REQUIREMENTS: usize = 32;
+pub const MAX_INIT_BYTES: usize = 1024 * 1024;
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ServiceRequirement {
+    pub binding: u64,
+    pub service: ServiceKey,
+}
+impl ServiceRequirement {
+    pub const EMPTY: Self = Self {
+        binding: 0,
+        service: ServiceKey::new(0, 0),
+    };
+    pub const fn new(binding: u64, service: ServiceKey) -> Self {
+        Self { binding, service }
+    }
+}
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ServiceBinding {
+    pub binding: u64,
+    pub resource: ResourceId,
+    pub service: ServiceKey,
+}
+pub type ValidateInitFn = unsafe extern "C" fn(*const u8, usize) -> u32;
+
+/// Owned on successful registration only. All calls stay on the request owner thread.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct ActivityHandle {
+    pub data: *mut c_void,
+    pub vtable: *const ActivityVTable,
+}
+
+#[repr(C)]
+pub struct ActivityVTable {
+    pub header: HandlerHeader,
+    /// Zero acknowledges the stop request; errors are retained and retried.
+    pub request_stop: unsafe extern "C" fn(*mut c_void) -> u32,
+    /// Done AND Error certify quiescence: join/unregistration and all callbacks
+    /// have returned. An unconfirmed shutdown MUST remain Pending.
+    pub poll_join: unsafe extern "C" fn(*mut c_void, *const crate::HostWaker) -> crate::RunStatus,
+    /// Called exactly once, only after terminal poll_join. Must not unwind.
+    pub destroy: unsafe extern "C" fn(*mut c_void),
+}
 
 #[repr(C)]
 pub struct HostTaskVTable {
@@ -13,6 +60,7 @@ pub struct HostTaskVTable {
     pub release: unsafe extern "C" fn(*mut c_void),
     pub stop_requested: unsafe extern "C" fn(*mut c_void) -> bool,
     pub checkpoint: unsafe extern "C" fn(*mut c_void, ServiceKey, *const u8, usize) -> u32,
+    pub register_activity: unsafe extern "C" fn(*mut c_void, ActivityHandle) -> u32,
 }
 
 #[repr(C)]
@@ -70,6 +118,28 @@ impl ServiceError {
     pub const PANICKED: Self = Self(6);
     pub const UNSUPPORTED_OPERATION: Self = Self(7);
     pub const FAILED: Self = Self(8);
+    pub const CANCELLED: Self = Self(9);
+    pub const CLOSED: Self = Self(10);
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct AsyncOperationId {
+    pub registry: u64,
+    pub serial: u64,
+}
+#[repr(C)]
+pub struct AsyncStarted {
+    pub status: u32,
+    pub id: AsyncOperationId,
+}
+#[repr(C)]
+pub struct AsyncPolled {
+    /// 0: pending, 1: quiescent. Pending errors do not certify completion.
+    pub ready: u32,
+    pub status: u32,
+    /// Required size on BUFFER_TOO_SMALL; completed results are retained.
+    pub written: usize,
 }
 
 #[repr(C)]
@@ -95,6 +165,25 @@ pub struct HostServicesVTable {
         *mut u8,
         usize,
     ) -> ServiceResult,
+    pub start_async: unsafe extern "C" fn(
+        *mut c_void,
+        ResourceId,
+        ServiceKey,
+        u32,
+        *const u8,
+        usize,
+        usize,
+    ) -> AsyncStarted,
+    pub poll_async: unsafe extern "C" fn(
+        *mut c_void,
+        AsyncOperationId,
+        *const crate::HostWaker,
+        *mut u8,
+        usize,
+    ) -> AsyncPolled,
+    pub cancel_async: unsafe extern "C" fn(*mut c_void, AsyncOperationId) -> u32,
+    /// Release after quiescence. Pending operations are cancelled and retained.
+    pub release_async: unsafe extern "C" fn(*mut c_void, AsyncOperationId),
 }
 
 /// One owning host reference when retained; descriptor copies alone do not
@@ -118,11 +207,17 @@ pub struct HandlerRequest {
     pub state_schema: ServiceKey,
     pub state: *const u8,
     pub state_len: usize,
+    pub bindings: *const ServiceBinding,
+    pub bindings_len: usize,
+    pub init_schema: ServiceKey,
+    pub init: *const u8,
+    pub init_len: usize,
 }
 
 /// Must copy the input/descriptor and retain host services before returning.
 /// The returned task may not borrow HandlerRequest or its input allocation.
-/// It must also retain task control and copy seed state. Factories only prepare
+/// It must also retain task control and copy seed state, resolved bindings and
+/// initialization bytes. Factories only prepare
 /// inert futures: business logic, IO and child-task startup begin at first poll.
 /// Destroying an unpolled staged task must not apply application state changes.
 pub type MakeRequestFn = unsafe extern "C" fn(*const HandlerRequest) -> AttachedFuture;
@@ -141,6 +236,12 @@ pub struct HandlerApi {
     pub service: ServiceKey,
     pub make_request: MakeRequestFn,
     pub state_schema: ServiceKey,
+    /// Inline bounded manifest: no foreign slice or allocation outlives loading.
+    pub required_services: [ServiceRequirement; MAX_SERVICE_REQUIREMENTS],
+    pub required_count: u32,
+    pub init_schema: ServiceKey,
+    /// Pure validator; must not run business logic or retain the borrowed bytes.
+    pub validate_init: Option<ValidateInitFn>,
 }
 
 impl HandlerApi {
@@ -153,11 +254,33 @@ impl HandlerApi {
             service,
             make_request,
             state_schema: ServiceKey::new(0, 0),
+            required_services: [ServiceRequirement::EMPTY; MAX_SERVICE_REQUIREMENTS],
+            required_count: 0,
+            init_schema: ServiceKey::new(0, 0),
+            validate_init: None,
         }
     }
 
     pub const fn with_state(mut self, schema: ServiceKey) -> Self {
         self.state_schema = schema;
+        self
+    }
+    pub const fn with_services(mut self, requirements: &[ServiceRequirement]) -> Self {
+        assert!(
+            requirements.len() <= MAX_SERVICE_REQUIREMENTS,
+            "too many service requirements"
+        );
+        self.required_count = requirements.len() as u32;
+        let mut i = 0;
+        while i < requirements.len() {
+            self.required_services[i] = requirements[i];
+            i += 1;
+        }
+        self
+    }
+    pub const fn with_init(mut self, schema: ServiceKey, validate: ValidateInitFn) -> Self {
+        self.init_schema = schema;
+        self.validate_init = Some(validate);
         self
     }
 }

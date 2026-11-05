@@ -163,7 +163,7 @@ static HOST_WAKER_VTABLE: HostWakerVTable = HostWakerVTable {
     drop: host_waker_drop,
 };
 
-pub(super) struct HostWakerGuard {
+pub(crate) struct HostWakerGuard {
     data: *mut c_void,
 }
 
@@ -173,7 +173,7 @@ impl Drop for HostWakerGuard {
     }
 }
 
-pub(super) fn host_waker_from(
+pub(crate) fn host_waker_from(
     waker: &Waker,
     keep_alive: Option<Arc<dyn Send + Sync>>,
 ) -> (HostWaker, HostWakerGuard) {

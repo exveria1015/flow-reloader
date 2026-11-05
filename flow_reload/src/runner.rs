@@ -19,7 +19,9 @@ use std::ffi::c_void;
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::SystemTime;
+#[cfg(test)]
+use std::time::UNIX_EPOCH;
 
 mod blocking;
 mod generation;
@@ -272,7 +274,7 @@ impl FlowRunner {
             .as_mut()
             .expect("loaded library missing")
             .image
-            .policy = policy;
+            .set_policy(policy);
     }
 
     pub fn run(&mut self, state: &mut AppState) -> Result<RunStatus, RunnerError> {
@@ -469,11 +471,22 @@ impl Drop for LoadedLib {
     }
 }
 
-struct LibraryCopy(PathBuf);
+struct LibraryCopy {
+    path: PathBuf,
+    id: crate::ArtifactId,
+}
 
 impl Drop for LibraryCopy {
     fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.0);
+        let error = std::fs::remove_file(&self.path)
+            .err()
+            .filter(|e| e.kind() != std::io::ErrorKind::NotFound)
+            .map(|e| crate::CopyRemovalError {
+                id: self.id,
+                path: self.path.clone(),
+                message: e.to_string(),
+            });
+        crate::retention::removed(self.id, error);
     }
 }
 
@@ -522,6 +535,7 @@ fn load_library(
         }
     }
 
+    image.activate();
     Ok(LoadedLib {
         entry,
         get_type,
@@ -538,44 +552,29 @@ fn load_library(
     })
 }
 
-fn copy_library(source_path: &Path, load_id: u64) -> Result<LibraryCopy, RunnerError> {
-    // Desktop launchers may start the process in a read-only working directory.
-    // Copies belong to host scratch storage, independent of the source/CWD.
-    let copy_dir = std::env::temp_dir()
-        .join("flow-reloader")
-        .join(std::process::id().to_string());
-    std::fs::create_dir_all(&copy_dir)?;
-    let ext = source_path
-        .extension()
-        .and_then(|value| value.to_str())
-        .unwrap_or("dll");
-    let stem = source_path
-        .file_stem()
-        .and_then(|value| value.to_str())
-        .unwrap_or("logic");
-    let sanitized_stem: String = stem
-        .chars()
-        .map(|ch| {
-            if ch.is_ascii_alphanumeric() || ch == '_' || ch == '-' {
-                ch
-            } else {
-                '_'
-            }
-        })
-        .collect();
-    let nonce = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_nanos())
-        .unwrap_or(0);
-    let pid = std::process::id();
-    let file_name = format!(
-        "logic_hot_{}_{}_{}_{}.{}",
-        sanitized_stem, pid, load_id, nonce, ext
-    );
-    let dest = copy_dir.join(file_name);
-    let copy = LibraryCopy(dest);
-    std::fs::copy(source_path, &copy.0)?;
-    Ok(copy)
+fn copy_library(source_path: &Path, _load_id: u64) -> Result<LibraryCopy, RunnerError> {
+    let result = (|| {
+        let directory = crate::cache::session_directory()?.join("copies");
+        let id = crate::retention::next_id()?;
+        let ext = source_path
+            .extension()
+            .and_then(|s| s.to_str())
+            .filter(|s| matches!(*s, "dll" | "so" | "dylib"))
+            .unwrap_or("bin");
+        let path = directory.join(format!("{:016x}.{ext}", id.0));
+        let mut source = std::fs::File::open(source_path)?;
+        let mut dest = crate::cache::new_file(&path)?;
+        crate::retention::copied(id, source_path.to_path_buf(), path.clone(), 0);
+        let copy = LibraryCopy { path, id };
+        let bytes = std::io::copy(&mut source, &mut dest)?;
+        crate::retention::update(id, |v| v.copy_bytes = bytes);
+        drop(dest);
+        Ok(copy)
+    })();
+    if result.is_err() {
+        crate::retention::copy_failed();
+    }
+    result
 }
 
 pub(crate) fn validate_metadata(metadata: Metadata) -> Result<(), RunnerError> {

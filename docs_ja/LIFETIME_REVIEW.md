@@ -1,23 +1,27 @@
 # 非同期実行の所有・借用・破棄順序
 
-現行の Handler ABI 2 と、互換用 AppState ABI v4 の寿命契約を区別します。
+現行の Handler ABI 5 と、互換用 AppState ABI v4 の寿命契約を区別します。
 
 ## メッセージ実行
 
 `RequestTask` は Future、コード世代、ホスト側の停止制御を保持します。
 DLL の RequestContext は入力・初期チェックポイントを所有し、サービスとタスク制御の参照を retain／release します。
 Router や元のレジストリハンドルを破棄しても、実行に必要な参照は残ります。
-RequestTask の完了・cancel・Drop では外国側 Future を破棄してから未完了数を減らします。
-Restart は管理対象ルートの Future 破棄まで待ってからチェックポイントを移行します。
+RequestTask の完了は外国側ルート Future と登録処理の join・破棄後に未完了数を減らします。
+cancel・Drop ではルート Future を破棄し、登録処理の後処理を所有スレッドのキューへ移します。
+後処理は `poll_cancelled_requests`、登録ワーカーの poll、Restart で駆動し、世代と必要なデータを保持します。
+Restart は管理対象ルートと登録処理の終了確認まで待ってからチェックポイントを移行します。
 
-これらは所有スレッドで扱います。独自 spawn・コールバックとその借用先は自動管理されません。
-停止要求と子処理の終了、コード回収は別の契約です。詳細は [Restart](RESTART_AND_MIGRATION.md) を参照。
+これらは所有スレッドで扱います。明示登録には所有データを持つ `'static` の処理／アダプターを使い、
+ルート Future の借用を外部へ残しません。未登録の独自 spawn・コールバックは自動管理しません。
+停止要求・終了確認・コード回収は別の契約です。詳細は [登録処理](MANAGED_ACTIVITIES.md) と [Restart](RESTART_AND_MIGRATION.md) を参照。
 
 ## コードの責務
 
 - `flow_reload/src/execution.rs`: 型付きのホスト状態を所有する `Execution<S>`。Future → 状態 → 世代参照の破棄順序。
 - `flow_reload/src/runner/blocking.rs`: 固定 AppState を借用する旧 API と、静的リンク実行の共通アダプター。
 - `flow_reload/src/attached/future.rs`: FFI Future の所有・poll・破棄。
+- `flow_reload/src/activity.rs`、`routing/control.rs`: 登録処理の ABI、停止・join、終了確認前の保持。
 - `flow_reload/src/attached/waker.rs`: Waker の変換と、poll 中のホスト Waker の一時設定。
 - `flow_reload/src/attached/host.rs`: ランタイム別の旧 sleep／TCP コールバック。
 - `flow_reload/src/attached/mod.rs`: 旧サービスヘルパーとランタイム接続スコープ。

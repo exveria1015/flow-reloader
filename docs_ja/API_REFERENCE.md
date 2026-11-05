@@ -2,8 +2,14 @@
 
 ## メッセージ API
 
+`retention_snapshot()` は SDK 内のネイティブ参照数・コピー時のファイル長・状態・検証結果と
+直近のコピー削除エラーを値として返し、画像参照を追加保持しません。メモリ量・予算使用数とは別です。
+`inspect_cache(&CacheOptions)`／`clean_cache(&CacheOptions)` はコピー専用ルートを検査し、
+clean は `apply=true` の場合だけ適格な終了済みセッションを削除します。CLI は `flow-cache` です。
+[管理単位・排他・限界](RETENTION_AND_CLEANUP.md) を参照してください。
+
 推奨する API は資源の所有・処理の受付・世代付き実行を分離します。
-**Handler ABI 2**、Services ABI 1、タスク制御 ABI 1 を使い、旧 AppState ABI v4 とは独立しています。
+**Handler ABI 5**、Services ABI 2、タスク制御 ABI 2 を使い、旧 AppState ABI v4 とは独立しています。
 
 ### 資源とロジック
 
@@ -41,8 +47,24 @@ factory 内で入力・seed をコピーし、サービスと制御表を retain
 本体の開始は最初の poll です。未 poll の生成・破棄で I/O や共有状態の変更を始めません。
 
 RequestContext は `input`、`generation`、`resource`、`service`、`services`、`call`、
-`stop_requested`、`cancelled`、`checkpoint`、`save_checkpoint` を公開します。
+`stop_requested`、`cancelled`、`checkpoint`、`save_checkpoint`、`spawn_child`、`register_activity` を公開します。
 checkpoint() は初期 seed、save_checkpoint はホストへの確定データのコピーです。
+`requires = &[ServiceRequirement::new(binding, key), ...]` と `init = Config` もマクロに指定できます。
+Config は `InitPayload`（SCHEMA・encode・decode）を実装します。
+`HandlerEnvironment::bind` と `with_initial(InitData::from_value(&config)?)` で設定を作り、
+RouterOptions とともに `load_with_environment` / `from_api_with_environment` へ渡します。
+候補の設定変更は `prepare_with_environment` / `prepare_api_with_environment` を使い、通常の prepare は現在の設定を再利用します。
+要求本体・factory の実行前に追加サービスと純粋な初期化デコードを検査し、受付・切り替え時も資源の失効を検査します。
+`initial::<Config>()`、`binding`、`call_service`、`call_service_async` で世代ごとのコピーと割り当てを使います。
+追加要求32件・初期化バイト列1 MiBが上限です。通常の input・Checkpoint とは別です。
+詳細は [複数サービスと初期化の契約](SERVICE_CONTRACTS_AND_INIT.md) を参照してください。
+`call_async(operation, input, max_output_bytes)` は所有スレッドで待つ `ServiceCall` を返します。
+入力をコピーし、ホスト I/O のキャンセル終了待ちを登録処理へ含めます。
+ホストは `HostResource::start_async` と所有 `HostServiceFuture` を実装し、`CancellationToken` で停止を確認します。
+`HostResources::with_async_limits` が操作・バッファ上限を指定します。
+`ThreadService::spawn` の `ServiceClient` だけをホストスレッド間で共有し、各ロジックスレッドの
+SDK ハンドルは移動しません。`ServiceWorker::shutdown()` と await で I/O スレッドを終了・join します。
+詳細は [非同期サービスと複数スレッド](ASYNC_SERVICES_AND_THREADS.md) を参照してください。
 ServiceError と捕捉した unwind は RunStatus::Error へ変換し、元の詳細エラーは現在の RequestTask から取得できません。
 デストラクタの panic や panic=abort からの復旧は対象外です。
 
@@ -65,8 +87,27 @@ ServiceError と捕捉した unwind は RunStatus::Error へ変換し、元の�
 
 RequestTask は Future・世代・制御を所有し、Router より長く生存できます。
 ホストが所有スレッド上で poll します。generation・resource・status で状態を確認できます。
-`cancel(self)` と Drop は当該 Future を同期的に破棄します。副作用の取り消しや独立した子処理の停止ではありません。
+`cancel(self)` と Drop はルート Future を同期的に破棄します。登録処理の停止・join は
+所有スレッドの終了待ちキューで継続し、それまで未完了数を減らしません。
+ホストは `poll_cancelled_requests(cx)` を進めます。`poll_workers` と Restart もこのキューを進めます。
+副作用の取り消しや未登録の独立した子処理の自動停止は行いません。
 外部 Waker はコード参照を保持し、ネイティブの既定は KeepLoaded です。
+
+### 登録した子処理と外部コールバック
+
+`spawn_child(|stop| async move { ... })` は所有スレッドで poll する `'static` な子 Future を登録します。
+`ChildStop::cancelled()` / `is_requested()` で停止を確認します。生成クロージャは登録成功後の初回 poll で呼びます。
+スレッドや外部ランタイムへの spawn ではありません。
+`register_activity(adapter)` は外部処理の JoinHandle／購読を所有する `unsafe impl ManagedActivity` を受け取ります。
+`request_stop` のエラーを記録・再試行し、`poll_join` は join・解除・実行中コールバックの帰還を確認してから
+`Ready(Ok/Err)` を返します。確認できなければ `Pending` です。登録拒否時の初回 poll 前の Drop も安全に実装します。
+
+`activity_count()` / `activity_error()`、ワーカーでは `worker_activity_count(id)` / `worker_activity_error(id)` が状態を返します。
+要求あたり同時64件、満杯は `BUSY`、停止・終了後の追加は `REVOKED` です。
+終了確認後も活動の失敗があれば Restart は `ActivityFailed` とし、対象世代の未完了数が0になってから
+`acknowledge_activity_failure(generation)` でアプリケーションが確認済みにできます。
+受付再開・ワーカー再登録・副作用の復旧は別操作です。
+詳細は [管理の契約と検証](MANAGED_ACTIVITIES.md) を参照してください。
 
 ### 登録ワーカーと Restart
 
@@ -75,6 +116,11 @@ RequestTask は Future・世代・制御を所有し、Router より長く生存
 - `stop_worker(id)`: 協調停止の要求。`remove_worker(id)`: キャンセルと登録解除。
 - `restart(candidate, migrate) -> Result<Restart<'_>, RouteError>`: 受付停止、旧 Drain 世代を含む全管理ルートの停止待ち、
   全チェックポイントの移行と factory 準備後に切り替え。Restart が登録ワーカーを駆動し、外部所有の RequestTask はホストが並行して進める。
+- `restart_with_commit(candidate, migrate, commit)`: 同じ停止・準備後、世代の切り替え直前に
+  同期の `FnOnce() -> Result<(), ServiceError>` を一度呼ぶ。それ以前の失敗・中断では呼ばない。
+  Err／unwind は `RouteError::HostCommit` として受付を停止。排他・トランザクション・復旧は
+  アプリの責務で、SDK は副作用を巻き戻さない。準備済みの割り当てを失効させてはいけない。
+  [SQLite とホスト内資源の例](HOST_RESOURCE_MIGRATION.md) を参照。
 
 再生成は登録ワーカーだけです。失敗・中断後は旧チェックポイントを維持し、受付を閉じたままにします。
 resume()? はワーカーの再生成ではありません。Restart は状態スキーマを変更できますが、サービス契約は一致が必要です。

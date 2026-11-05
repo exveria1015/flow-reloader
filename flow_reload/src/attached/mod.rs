@@ -9,6 +9,8 @@ pub(crate) use host::async_std_runtime_vtable;
 #[cfg(feature = "smol")]
 pub(crate) use host::smol_runtime_vtable;
 pub use host::tokio_runtime_vtable;
+pub(crate) use waker::host_waker_from;
+pub(crate) use waker::waker_from_host;
 pub use waker::{poll_attached_future, poll_attached_result_future};
 
 use crate::RunStatus;

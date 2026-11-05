@@ -329,6 +329,8 @@ fn independent_executions_keep_retired_generation_until_completion_or_cancellati
     }
     let unloads = leaked_counter();
     observe_unload(&runner, unloads);
+    let observed_copy = runner.loaded_ref().image.copy_path().to_path_buf();
+    let observed_snapshot = crate::retention_snapshot();
     let mut old = runner.start(AppState::default()).unwrap();
     let mut cancelled = runner.start(AppState::default()).unwrap();
     let mut cx = Context::from_waker(Waker::noop());
@@ -348,6 +350,15 @@ fn independent_executions_keep_retired_generation_until_completion_or_cancellati
     drop(old);
     assert_eq!(unsafe { collect_retired_libraries() }, 1);
     assert_eq!(unloads.load(Ordering::Relaxed), 1);
+    // Keeping a value snapshot alive must not retain an additional DLL lease.
+    assert!(observed_snapshot
+        .images
+        .iter()
+        .any(|v| v.copy == observed_copy));
+    assert!(!crate::retention_snapshot()
+        .images
+        .iter()
+        .any(|v| v.copy == observed_copy));
     assert_eq!(Pin::new(&mut new).poll(&mut cx), Poll::Pending);
     assert_eq!(
         Pin::new(&mut new).poll(&mut cx),

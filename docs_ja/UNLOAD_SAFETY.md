@@ -15,8 +15,9 @@ Runner を破棄しても、旧 DLL を自動でアンロードしない。
 独自に spawn した処理は継続するため、外部 I/O や副作用も継続し得る。
 
 保持にはコストがある。リロードごとにコード・静的データ・コピー DLL の使用量が増える。
-コピー先はユーザーの一時領域の `flow-reloader/<PID>/`。ファイルはプロセス終了後も残る場合がある。
-不要なコピーを消す場合は、それを使用しているホストプロセスの終了後に行う。
+コピー先はユーザーの一時領域の `flow-reloader/managed-v1/sessions/<SessionId>/copies/`。
+ファイルはプロセス終了後も残る場合がある。[観測と掃除](RETENTION_AND_CLEANUP.md) は終了済みの
+新形式セッションを検査・削除する。DLL のアンロード条件を緩めず、旧 PID 形式は表示だけにする。
 
 ## 追跡する参照
 
@@ -89,4 +90,5 @@ cargo test -p flow_reload --release --all-features
 検証の対象・限界と CI の範囲は [テスト](TESTING.md) を参照。
 
 管理外タスクの強制停止や、追跡付きの汎用 spawn API は提供しない。
-登録ワーカーには [Restart](RESTART_AND_MIGRATION.md) を使えるが、独立した子処理の終了確認を代替しない。
+メッセージ API では [明示登録した処理](MANAGED_ACTIVITIES.md) の停止・join・解除を
+ルートの終了待ちに含める。未登録の処理の終了確認や、WhenIdle の自動回収を代替するものではない。

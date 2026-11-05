@@ -5,6 +5,7 @@ use std::process::Command;
 use std::sync::mpsc::{self, Receiver};
 
 pub use crate::attached::{poll_attached_future, poll_attached_result_future};
+pub use crate::environment::validate_init_data;
 pub use crate::request::make_handler_future;
 
 /// Runs statically linked SDK entrypoints through the same execution path as

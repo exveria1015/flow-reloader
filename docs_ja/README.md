@@ -13,6 +13,7 @@
 - [導入手順](GETTING_STARTED.md): ホストとロジックの分離、最初の実行。
 - [サンプル一覧](../examples/README.md): 接続維持、Restart、GUI と旧 API の例。
 - [Tauri GUI Lab](TAURI_GUI_LAB.md): 画面内で Rust を編集し、切り替えと失敗復旧を試す。
+- [Bevy ゲームへの最小適用](BEVY_GAME.md): 実 DLL、フレーム境界、旧結果の破棄、複数フレームの Restart。
 - [API リファレンス](API_REFERENCE.md): 現行 API、ABI、旧 API の区別。
 
 ## 設計と運用
@@ -20,7 +21,12 @@
 - [設計と要件](ARCHITECTURE.md): 所有、切り替え境界、対象範囲と未提供の性質。
 - [ホスト資源と受付切り替え](HOST_RESOURCES_AND_ROUTING.md): サービス契約と Drain。
 - [Restart と状態移行](RESTART_AND_MIGRATION.md): 停止待ち、保存、移行、失敗時の挙動、予算。
+- [ホスト資源・DB の移行](HOST_RESOURCE_MIGRATION.md): 最終確定フック、SQLite とキャッシュの排他、失敗の遮断と復旧。
+- [子タスク・外部コールバック](MANAGED_ACTIVITIES.md): 明示登録、停止・join、Drop 後の終了待ちと失敗。
+- [非同期サービス・複数スレッド](ASYNC_SERVICES_AND_THREADS.md): 実 I/O、待機・キャンセル、有界 FIFO、所有と通知。
+- [複数サービス・型付き初期化](SERVICE_CONTRACTS_AND_INIT.md): 必要サービスの照合、世代ごとの設定、形式不一致の拒否。
 - [開発時の運用](DEVELOPMENT.md): ビルド、復旧、DLL コピーの扱い。
+- [保持量の観測と掃除](RETENTION_AND_CLEANUP.md): DLL 参照の観測、セッション管理、終了後のコピー掃除。
 - [トラブルシューティング](TROUBLESHOOTING.md): エラー別の確認点。
 - [残る課題](REMAINING_WORK.md): 現在の未実装・未検証事項と完了条件。
 

@@ -15,6 +15,13 @@ members = [
     "examples/snapshot_host",
     "examples/service_logic",
     "examples/service_host",
+    "examples/threaded_io_logic",
+    "examples/contracts_logic",
+    "examples/db_migration_host",
+    "examples/db_migration_logic",
+    "examples/bevy_game_protocol",
+    "examples/bevy_game_logic",
+    "examples/bevy_game_host",
     "examples/tauri_tokio_logic",
     "examples/tauri_tokio/src-tauri",
 ]

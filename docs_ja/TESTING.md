@@ -5,9 +5,20 @@
 | 対象 | 確認するもの |
 | --- | --- |
 | `host_resources` | 所有、失効、資源 ID・版、借用競合、出力容量、panic 境界 |
+| `cache_lifecycle` | 別プロセスのホスト／CLI、画像の状態、Router Drop 後の lease、正常／強制終了、非継承、namespace 競合、trash 再試行、不明／旧形式／リンクの除外 |
 | `request_routing` | 入力コピー、Drain、候補拒否、受付停止・再開、Router より長い実行寿命 |
 | `restart` | 協調停止、旧 Drain 世代の終了待ち、移行の段階適用、失敗・中断・再試行、上限 |
-| `native_routing` | 実 DLL と同じ TCP 接続、異なる DLL 間のチェックポイント形式変更 |
+| `host_commit` | 確定フックの順序・一回性、それ以前の失敗・中断・再試行・panic |
+| DB host `database` | 実 SQLite の schema/data rollback、BEGIN／COMMIT 競合、キャッシュ排他、復旧時の遮断、overflow |
+| DB host `native_migration`（ignored） | 実 DLL 3種類の互換 Drain・非互換 Restart、rollback／再試行、旧資源の拒否、永続版の再 open |
+| `managed_activities` | 明示登録、子の遅延終了、解除失敗、Drop 後の終了待ち、上限、panic と再試行 |
+| `async_services` | 入出力コピー・サイズと枠の上限、キャンセル終了待ち、失効、操作 ID、バッファ不足での結果保持 |
+| `threaded_services` | FIFO・容量・通知・shutdown／join、2本のロジック所有スレッド、実 TCP と読み取り中キャンセル |
+| `native_threaded_io`（ignored） | 実 SDK DLL 2世代、2本のロジックスレッド、ホスト所有の TCP I/O、Drain と所有スレッドでの破棄 |
+| `service_contracts` | 複数要求・明示割り当て、初期化スキーマ・形式・panic拒否、失効の再検査、世代間の設定保持 |
+| `native_contracts`（ignored） | 実 SDK DLL 2世代のサービス不足・版違い・初期化形式拒否、同期／非同期の複数サービス利用 |
+| `native_routing` | 実 DLL と同じ TCP 接続、チェックポイント形式変更、別スレッドのコールバック帰還・join・解除失敗、旧 ABI 拒否 |
+| Bevy `native_game` の ignored テスト | 実 DLL と Bevy ECS、フレーム境界、遅延停止・復元、旧世代・Entity・入力版の結果検査、所有スレッド |
 | `async_direct` / `async_snapshot` / `execution` | 生成コードと所有状態の借用、同時 Pending、完了・panic・キャンセル・破棄順序 |
 | `runner::tests` | 旧 API の実 DLL 寿命、失敗候補、管理外タスク、限定した明示的アンロード |
 | `main_macro` | 公開9形式のコンパイル確認。テスト件数0でも Debug／Release の展開を検査する |
@@ -45,6 +56,40 @@ node --check examples/tauri_tokio/dist/main.js
 ignored 統合テストは一時的にテストプロセスの作業ディレクトリを変えるため、単一テストスレッドで実行します。
 実際の GUI の見た目・操作は [GUI Lab](TAURI_GUI_LAB.md) の手順で確認してください。
 
+## Bevy ゲーム統合
+
+Bevy のネイティブ統合は描画なしで別途確認します。詳しくは [ゲームへの最小適用](BEVY_GAME.md)。
+
+```powershell
+cargo clippy -p bevy_game_host -p bevy_game_logic -p bevy_game_protocol --all-targets --all-features -- -D warnings
+cargo test -p bevy_game_host --test native_game -- --ignored --test-threads=1
+```
+
+## ホスト資源・SQLite の移行
+
+```powershell
+cargo clippy -p db_migration_host -p db_migration_logic --all-targets --all-features -- -D warnings
+cargo test -p db_migration_host --test database
+cargo test -p db_migration_host --test native_migration -- --ignored --test-threads=1
+```
+
+この例だけが rusqlite と bundled SQLite に依存し、C コンパイラが必要です。
+DB は `target/` 内に新規作成し、既存アプリの DB は使用しません。
+[移行方針と限界](HOST_RESOURCE_MIGRATION.md) を参照してください。
+
+## 保持量とコピーの掃除
+
+```powershell
+cargo test -p flow_reload --test cache_lifecycle -- --test-threads=1
+```
+
+`target/cache-lifecycle-tests/` 内の独立したルートで、ホスト子プロセスと実 CLI を動かします。
+利用者の既定コピー領域を apply するテストではありません。
+ignored の2関数は親テストからだけ呼ぶ子プロセスの入口です。
+共通の終了・排他・掃除に加え、Windows では削除拒否・junction、Unix では symlink・共有書き込み可能なルートの拒否を検査します。
+既存の WhenIdle 実 DLL 試験では、観測スナップショットを保持したまま実際の回収が可能なことも検査します。
+これらの OS・ファイル検査は Miri の対象外です。[利用契約](RETENTION_AND_CLEANUP.md) を参照してください。
+
 ## Miri
 
 固定ツールチェーンと Linux インタープリターターゲットを使います。通常ビルドの既定ツールチェーンは変更しません。
@@ -57,7 +102,9 @@ cargo +nightly-2026-11-02 miri setup --target x86_64-unknown-linux-gnu
 
 スクリプトは Stacked／Tree Borrows の両方を seed 0 で実行します。
 `-Seed 1` で別 seed、`-BorrowModel Stacked` または `Tree` で単独実行できます。
-対象は attached、direct、snapshot、execution、resources、routing、restart、Release main です。
+対象は attached、direct、snapshot、execution、resources、routing、restart、host commit、managed activities、async services、threaded services、service contracts、Release main です。
+Miri では threaded services の実 TCP テストを除外し、同期・通知・所有の検査だけを行います。
+SQLite と C コードはネイティブで確認し、Miri はコアの確定フックの管理だけを対象にします。
 Release 指定はマクロの分岐を選ぶためで、最適化した機械語の検証ではありません。
 
 ログ、コンパイラ情報、対象ソースと Cargo.lock の SHA-256、終了コードを `target/miri-audit/seed-<seed>/` に保存します。

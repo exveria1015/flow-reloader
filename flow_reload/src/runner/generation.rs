@@ -78,7 +78,13 @@ impl GenerationOwner {
         Self::open(super::copy_library(source, id)?, UnloadPolicy::KeepLoaded)
     }
     pub(super) fn open(copy: LibraryCopy, policy: UnloadPolicy) -> Result<Self, RunnerError> {
-        let library = unsafe { Library::new(&copy.0)? };
+        let library = unsafe { Library::new(&copy.path) }.inspect_err(|_| {
+            crate::retention::open_failed();
+        })?;
+        crate::retention::update(copy.id, |v| {
+            v.loaded = true;
+            v.policy = policy;
+        });
         Ok(Self {
             image: Some(Arc::new(LibraryGeneration {
                 library,
@@ -87,6 +93,33 @@ impl GenerationOwner {
             owner: thread::current().id(),
             policy,
         })
+    }
+
+    pub(crate) fn prepared(&self) {
+        crate::retention::update(self.artifact_id(), |v| {
+            v.state = crate::ImageState::Prepared;
+            v.outcome = crate::ImageOutcome::Candidate;
+        });
+    }
+    pub(crate) fn activate(&self) {
+        crate::retention::update(self.artifact_id(), |v| {
+            v.state = crate::ImageState::Active;
+            v.outcome = crate::ImageOutcome::Adopted;
+        });
+    }
+    pub(crate) fn retire(&self) {
+        crate::retention::update(self.artifact_id(), |v| v.state = crate::ImageState::Retired);
+    }
+    pub(super) fn set_policy(&mut self, policy: UnloadPolicy) {
+        self.policy = policy;
+        crate::retention::update(self.artifact_id(), |v| v.policy = policy);
+    }
+    fn artifact_id(&self) -> crate::ArtifactId {
+        self.image
+            .as_ref()
+            .expect("generation image missing")
+            ._copy
+            .id
     }
 
     pub(crate) fn library(&self) -> &Library {
@@ -111,13 +144,21 @@ impl GenerationOwner {
             .as_ref()
             .expect("generation image missing")
             ._copy
-            .0
+            .path
     }
 }
 
 impl Drop for GenerationOwner {
     fn drop(&mut self) {
         let image = self.image.take().expect("generation image missing");
+        crate::retention::update(image._copy.id, |v| {
+            v.state = crate::ImageState::Retired;
+            v.outcome = match v.outcome {
+                crate::ImageOutcome::Pending => crate::ImageOutcome::Rejected,
+                crate::ImageOutcome::Candidate => crate::ImageOutcome::Abandoned,
+                other => other,
+            };
+        });
         RETIRED
             .lock()
             .unwrap_or_else(|err| err.into_inner())

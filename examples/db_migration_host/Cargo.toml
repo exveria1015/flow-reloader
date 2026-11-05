@@ -1,0 +1,9 @@
+[package]
+name = "db_migration_host"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+
+[dependencies]
+flow_reload = { path = "../../flow_reload" }
+rusqlite = { version = "=0.41.1", default-features = false, features = ["bundled"] }

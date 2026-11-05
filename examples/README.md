@@ -8,7 +8,12 @@ Run commands from the workspace root. 新規実装では上段のメッセージ
 | --- | --- |
 | `cargo run -p service_host` | Host-owned TCP connection and Drain at message boundaries / 同じ接続の次の要求を新世代へ |
 | `cargo run -p flow_reload --example restart` | Static worker shutdown, checkpoint schema migration, shared load budget / 停止・移行の最小例 |
+| `cargo run -p flow_reload --example managed_children` | Root return waits for registered child cleanup before Restart / 子の終了待ちと切り替え |
+| `cargo run -p flow_reload --example threaded_io` | Two DLL generations, two logic owners, bounded host I/O and TCP / 非同期サービスと複数スレッド |
+| `cargo run -p flow_reload --example contracts` | Multi-service requirements, typed init validation, generation-owned environments / 複数サービスと型付き初期化 |
+| `cargo run -p db_migration_host` | Real DLLs, SQLite + host cache migration, rollback, retry and durable reopen / ホスト資源・DB の移行 |
 | `cargo run -p tauri_tokio` | Native DLL builds, in-window editor, Drain/Restart, counter and build failure recovery / GUI で編集・復旧 |
+| `cargo run -p bevy_game_host -- --verify` | Headless Bevy 0.20.1, real DLLs, frame cutover, delayed worker Restart and stale job rejection / ゲームへの最小適用 |
 
 - [service_host](service_host/src/main.rs) + [service_logic](service_logic/src/lib.rs):
   one client on `127.0.0.1:4000` (`FLOW_RELOAD_ADDR` overrides it). Send newline-terminated
@@ -16,6 +21,16 @@ Run commands from the workspace root. 新規実装では上段のメッセージ
   processed at message boundaries or while polling a request. Not a general async server.
 - [restart](../flow_reload/examples/restart.rs): statically linked APIs; native loading
   is covered separately by tests. [移行の説明](../docs_ja/RESTART_AND_MIGRATION.md)。
+- [db_migration_host](db_migration_host/src/lib.rs) + [db_migration_logic](db_migration_logic/src/lib.rs):
+  builds three DLL variants, creates a fresh SQLite file under `target/db-migration-demo/`,
+  verifies compatible Drain and breaking Restart, then exits. A C compiler is needed
+  for bundled SQLite. [排他・失敗・復旧の契約](../docs_ja/HOST_RESOURCE_MIGRATION.md)。
+- [bevy_game_host](bevy_game_host/src/lib.rs) + [bevy_game_logic](bevy_game_logic/src/lib.rs):
+  Rust 1.97.1+; `--verify` builds slow/fast native variants and exits after assertions.
+  Without arguments, run at about 60 frames/s, edit the logic's `STEP` and save to
+  build in the background and Restart. No renderer/window required. Only the logic's
+  `src/lib.rs` is watched. The host owns ECS; the DLL sends copied messages.
+  [設計・実行手順・検証結果](../docs_ja/BEVY_GAME.md)。
 - [Tauri guide](../docs/TAURI_GUI_LAB.md) / [日本語](../docs_ja/TAURI_GUI_LAB.md): the historical package name `tauri_tokio`
   does not imply use of the old attached Tokio bridge. `tauri_tokio/dist/` contains
   **handwritten UI source**, embedded by Tauri; it is not disposable build output.
