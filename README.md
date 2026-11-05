@@ -78,3 +78,10 @@ cargo test -p interface -p hot_macro -p flow_reload --release --all-features
 See [testing and scope](docs/TESTING.md) for native DLL fixtures, the GUI backend
 test, Miri setup and CI coverage. Miri, native DLL tests and interactive GUI checks
 cover different behavior; none establishes safety for arbitrary plugins.
+
+## License
+
+Licensed under either the [MIT License](LICENSE-MIT) or the
+[Apache License, Version 2.0](LICENSE-APACHE), at your option.
+
+SPDX identifier: `MIT OR Apache-2.0`.

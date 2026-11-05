@@ -2,6 +2,7 @@
 name = "async_smol_host"
 version = "0.1.0"
 edition = "2021"
+license.workspace = true
 
 [dependencies]
 flow_reload = { path = "../../flow_reload", features = ["smol"] }

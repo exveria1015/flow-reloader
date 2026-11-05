@@ -32,3 +32,8 @@
 - [Miri 導入時の監査記録](archive/MIRI_BASELINE.md): 修正前の借用違反の証拠。現在の利用手順とは区別する。
 
 [English documentation](../docs/README.md)
+
+## ライセンス
+
+[MIT License](../LICENSE-MIT) または [Apache License 2.0](../LICENSE-APACHE) のいずれかを選択できます。
+SPDX 表記は `MIT OR Apache-2.0` です。
