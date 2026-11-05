@@ -69,6 +69,13 @@ independent of CWD. It does not edit the live sample or open a window. Use one t
 thread because it temporarily changes the test process's CWD. Interactive checks
 follow the [GUI guide](TAURI_GUI_LAB.md).
 
+The Linux GUI job also launches the real WebView under Xvfb with
+`tauri-driver 2.1.0`. The standard-library Python smoke test clicks editor
+presets and save, compares Drain/Restart, sends a request, injects a build error
+and repairs it while checking host/counter continuity. It restores the sample
+source and uploads a screenshot and diagnostics. This tests UI behavior;
+manual visual review and Windows interactive checks remain separate.
+
 ## Bevy game integration
 
 ```sh

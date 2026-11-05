@@ -66,6 +66,12 @@ node --check examples/tauri_tokio/dist/main.js
 ignored 統合テストは一時的にテストプロセスの作業ディレクトリを変えるため、単一テストスレッドで実行します。
 実際の GUI の見た目・操作は [GUI Lab](TAURI_GUI_LAB.md) の手順で確認してください。
 
+Linux GUI ジョブでは `tauri-driver 2.1.0` と Xvfb で実際の WebView も起動します。
+標準ライブラリだけの Python 試験で、編集例の選択・保存、Drain／Restart、要求送信、
+ビルドエラーと修復、同じホストとカウンターの継続を検査します。
+終了時にサンプルのソースを復元し、画面と診断ログを artifact に保存します。
+画面の目視評価と Windows での実操作は、この自動試験と分けて確認してください。
+
 ## Bevy ゲーム統合
 
 Bevy のネイティブ統合は描画なしで別途確認します。詳しくは [ゲームへの最小適用](BEVY_GAME.md)。

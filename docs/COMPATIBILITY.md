@@ -14,6 +14,7 @@ use the same message API and ownership contracts.
 | Tauri GUI | Platform Tauri prerequisites; WebView2 on Windows; no npm or Tauri CLI |
 | Native core and examples | Windows and Linux CI jobs are configured |
 | GUI backend | Windows and Linux CI integration without opening a window |
+| GUI interaction | Linux WebView under Xvfb; editor, Drain/Restart and build-error recovery |
 | macOS / other targets | No CI coverage in this repository |
 
 CI configuration describes what is checked, not a guarantee that a particular

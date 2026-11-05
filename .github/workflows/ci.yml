@@ -48,7 +48,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential libssl-dev libxdo-dev libayatana-appindicator3-dev librsvg2-dev
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential libssl-dev libxdo-dev libayatana-appindicator3-dev librsvg2-dev webkit2gtk-driver xvfb
       - name: Set up Rust
         run: |
           rustup update stable --no-self-update
@@ -63,6 +63,28 @@ jobs:
           cargo clippy -p tauri_tokio -p tauri_tokio_logic --all-targets --locked -- -D warnings
       - name: Native GUI backend integration (no window required)
         run: cargo test -p tauri_tokio --bin tauri_tokio --locked -- --ignored --test-threads=1
+      - uses: actions/setup-python@v5
+        if: runner.os == 'Linux'
+        with:
+          python-version: '3.x'
+      - name: Build real GUI and WebDriver
+        if: runner.os == 'Linux'
+        run: |
+          cargo build -p tauri_tokio --locked
+          cargo install tauri-driver --version 2.1.0 --locked
+      - name: Real WebView editor, Drain, Restart and recovery
+        if: runner.os == 'Linux'
+        env:
+          LIBGL_ALWAYS_SOFTWARE: '1'
+        run: |
+          xvfb-run -a python scripts/check-gui.py
+          git diff --exit-code -- examples/tauri_tokio_logic/src/lib.rs
+      - name: Save GUI smoke diagnostics
+        if: always() && runner.os == 'Linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: gui-webview-linux
+          path: target/gui-smoke/
 
   miri:
     runs-on: ubuntu-latest

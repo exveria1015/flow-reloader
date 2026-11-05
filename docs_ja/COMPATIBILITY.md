@@ -14,6 +14,7 @@ flow-reloader は、ローカル開発中に信頼済みの Rust ロジックを
 | Tauri GUI | 各 OS の Tauri ビルド環境。Windows は WebView2。npm・Tauri CLI は不要 |
 | ネイティブのコア・サンプル | Windows・Linux の CI を設定 |
 | GUI バックエンド | Windows・Linux CI で、実ウィンドウを開かずに検査 |
+| GUI 操作 | Linux の WebView を Xvfb で起動。編集・Drain／Restart・ビルドエラー復帰を検査 |
 | macOS・その他の環境 | このリポジトリでは CI を設定していない |
 
 CI の設定は検査対象を示すもので、特定の版の成功を保証するものではありません。
