@@ -57,7 +57,8 @@ pub mod services {
         pub request_stop: unsafe extern "C" fn(*mut c_void) -> u32,
         /// Done AND Error certify quiescence: join/unregistration and all callbacks
         /// have returned. An unconfirmed shutdown MUST remain Pending.
-        pub poll_join: unsafe extern "C" fn(*mut c_void, *const super::HostWaker) -> super::RunStatus,
+        pub poll_join:
+            unsafe extern "C" fn(*mut c_void, *const super::HostWaker) -> super::RunStatus,
         /// Called exactly once, only after terminal poll_join. Must not unwind.
         pub destroy: unsafe extern "C" fn(*mut c_void),
     }

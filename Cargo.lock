@@ -1528,6 +1528,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "contracts_protocol"
+version = "0.1.0"
+dependencies = [
+ "flow_reload",
+]
+
+[[package]]
 name = "convert_case"
 version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1544,13 +1551,6 @@ checksum = "1a373e3602691c3cdea496d2f0ee5935151e6168fe87739483c463db1b2f2f87"
 dependencies = [
  "time",
  "version_check",
-]
-
-[[package]]
-name = "contracts_protocol"
-version = "0.1.0"
-dependencies = [
- "flow_reload",
 ]
 
 [[package]]
