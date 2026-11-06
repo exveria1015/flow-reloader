@@ -144,6 +144,7 @@ struct Generation {
     id: u64,
     api: HandlerApi,
     in_flight: Cell<usize>,
+    scope: Rc<crate::generation_scope::GenerationScope>,
     image: Option<GenerationOwner>,
     controls: RefCell<Vec<Weak<Control>>>,
     completion: Rc<RefCell<Option<std::task::Waker>>>,
@@ -218,6 +219,8 @@ impl RequestRouter {
     /// The module must be trusted, including initializers/finalizers. Its API
     /// must obey HandlerRequest's copy/retain contract and the owned FFI future
     /// protocol. All calls, polling and destruction occur on this thread.
+    /// Executor Wakers used with managed notifications must belong to resident
+    /// host code, independently of reloadable generations.
     #[cfg(feature = "native")]
     pub unsafe fn load(
         path: impl AsRef<Path>,
@@ -315,6 +318,9 @@ impl RequestRouter {
             active: Rc::new(Generation {
                 id: 1,
                 api,
+                scope: crate::generation_scope::GenerationScope::new(
+                    image.as_ref().map(GenerationOwner::lease),
+                ),
                 image,
                 in_flight: Cell::new(0),
                 controls: RefCell::new(Vec::new()),
@@ -431,6 +437,9 @@ impl RequestRouter {
         let next = Rc::new(Generation {
             id,
             api: candidate.api,
+            scope: crate::generation_scope::GenerationScope::new(
+                candidate.image.as_ref().map(GenerationOwner::lease),
+            ),
             image: candidate.image,
             in_flight: Cell::new(0),
             controls: RefCell::new(Vec::new()),
@@ -486,6 +495,7 @@ impl RequestRouter {
             checkpoint.clone(),
             self.options.max_checkpoint_bytes,
             generation.image.as_ref().map(GenerationOwner::lease),
+            Rc::downgrade(&generation.scope),
         );
         let (state_schema, state) = checkpoint
             .as_ref()
@@ -667,6 +677,7 @@ impl RequestTask {
 
     fn finish(&mut self, status: RunStatus) {
         if self.status.is_none() {
+            self.control.notification_gate.revoke();
             self.control.waker.borrow_mut().take();
             self.task = None;
             self.status = Some(status);
@@ -690,6 +701,7 @@ impl Future for RequestTask {
             return Poll::Ready(status);
         }
         *self.control.waker.borrow_mut() = Some(cx.waker().clone());
+        self.control.notification_gate.update(cx.waker());
         if self.root_status.is_none() {
             if let Poll::Ready(status) = Pin::new(self.task.as_mut().unwrap()).poll(cx) {
                 self.task = None;
@@ -780,6 +792,7 @@ pub fn poll_cancelled_requests(cx: &mut Context<'_>) -> Poll<()> {
             return false;
         }
         if request.control.poll_activities(cx) {
+            request.control.notification_gate.revoke();
             if request.control.failure.get().is_some() {
                 request.generation.activity_failed.set(true);
             }

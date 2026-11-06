@@ -5,8 +5,11 @@ mod async_service;
 mod cache;
 mod environment;
 mod generation;
+mod generation_local;
+mod generation_scope;
 #[cfg(feature = "native")]
 mod native;
+mod notification;
 mod request;
 mod resources;
 #[cfg(feature = "native")]
@@ -22,6 +25,8 @@ pub use async_service::{
 #[cfg(feature = "native")]
 pub use cache::{clean_cache, inspect_cache, CacheEntry, CacheOptions, CacheReport, CacheStatus};
 pub use environment::{HandlerEnvironment, InitData, InitPayload};
+pub use generation_local::GenerationLocal;
+pub use generation_scope::MAX_GENERATION_LOCALS;
 pub use hot_macro::reload_handler;
 pub use interface::services::{
     ActivityHandle, ActivityVTable, AsyncOperationId, AsyncPolled, AsyncStarted, HandlerApi,
@@ -32,6 +37,7 @@ pub use interface::services::{
 pub use interface::{HostWaker, HostWakerVTable, RunStatus, TaskHandle, TaskVTable};
 #[cfg(feature = "native")]
 pub use native::{reclaim_native_image, LoadError, ReclaimResult};
+pub use notification::HostNotification;
 pub use request::RequestContext;
 pub use resources::{HostResource, HostResources, Resource, Services};
 #[cfg(feature = "native")]

@@ -63,6 +63,12 @@ resolver = "2"
 $($taskPatches -join "`n")
 "@
     Set-Content -LiteralPath (Join-Path $taskStage 'Cargo.toml') -Value $taskWorkspace -Encoding utf8
+    # Standalone SDK fixtures create their own workspace below target/tmp.
+    # Cargo config keeps their transitive SDK dependencies on these archives too.
+    $taskConfigDirectory = Join-Path $taskStage '.cargo'
+    New-Item -ItemType Directory -Path $taskConfigDirectory -Force | Out-Null
+    $taskConfig = "[patch.crates-io]`n" + ($taskPatches -join "`n")
+    Set-Content -LiteralPath (Join-Path $taskConfigDirectory 'config.toml') -Value $taskConfig -Encoding utf8
     Copy-Item -LiteralPath (Join-Path $taskRoot 'Cargo.lock') -Destination (Join-Path $taskStage 'Cargo.lock')
     $taskConsumer = Join-Path $taskStage 'consumer/src'
     New-Item -ItemType Directory -Path $taskConsumer -Force | Out-Null
@@ -134,12 +140,16 @@ fn main() {
         '--locked'
     ) + $taskResolution + @('--', '--test-threads=1'))
     Invoke-CheckedCargo (@(
+        'test', '--manifest-path', $taskManifest, '-p', 'flow_reload', '--test', 'native_managed_generation',
+        '--locked'
+    ) + $taskResolution + @('--', '--test-threads=1'))
+    Invoke-CheckedCargo (@(
         'run', '--manifest-path', $taskManifest, '-p', 'package_consumer', '--locked'
     ) + $taskResolution)
     @{
         archives = $taskArchives
         extracted_workspace = $taskStage
-        checks = @('all-targets/all-features', 'all-targets/no-default-features', 'standalone ABI DLL', 'explicit native reclamation', 'static consumer')
+        checks = @('all-targets/all-features', 'all-targets/no-default-features', 'standalone ABI DLL', 'explicit native reclamation', 'managed generation cleanup', 'static consumer')
     } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $taskStage 'result.json') -Encoding utf8
     Write-Host "Verified extracted SDK packages and consumer: $taskStage"
 } finally {

@@ -33,6 +33,8 @@ pub enum RetentionReason {
     ExternalQuiescenceUnconfirmed,
     Reclaiming,
     CloseUncertain,
+    RegisteredLocals { count: usize },
+    LocalCleanupFailed { count: u64 },
 }
 #[derive(Clone, Debug)]
 pub struct ImageRecord {
@@ -50,6 +52,8 @@ pub struct ImageRecord {
     pub retention_reasons: Vec<RetentionReason>,
     /// close consumed its handle but did not confirm release. Never retry it.
     pub close_error: Option<String>,
+    pub registered_locals: usize,
+    pub local_cleanup_failures: u64,
     pub(crate) reclaiming: bool,
 }
 #[derive(Clone, Debug)]
@@ -138,6 +142,8 @@ pub(crate) fn copied(id: ArtifactId, source: PathBuf, copy: PathBuf, bytes: u64)
             active_calls: 0,
             retention_reasons: Vec::new(),
             close_error: None,
+            registered_locals: 0,
+            local_cleanup_failures: 0,
             reclaiming: false,
         },
     );

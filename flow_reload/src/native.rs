@@ -131,7 +131,7 @@ pub(crate) unsafe fn load(path: &Path) -> Result<(HandlerApi, GenerationOwner), 
         .unwrap_or_else(|e| e.into_inner())
         .push(library.clone());
     let image = GenerationOwner {
-        code: CodeLease::new(library.clone(), library.executions.clone()),
+        code: CodeLease::new(library.clone(), library.executions.clone()).with_native_id(id),
         id,
     };
     let _call = image.enter();
@@ -177,6 +177,16 @@ pub enum ReclaimResult {
 
 fn reasons(record: &ImageRecord, image: Option<&Arc<LibraryImage>>) -> Vec<RetentionReason> {
     let mut reasons = Vec::new();
+    if record.registered_locals != 0 {
+        reasons.push(RetentionReason::RegisteredLocals {
+            count: record.registered_locals,
+        });
+    }
+    if record.local_cleanup_failures != 0 {
+        reasons.push(RetentionReason::LocalCleanupFailed {
+            count: record.local_cleanup_failures,
+        });
+    }
     if record.reclaiming {
         reasons.push(RetentionReason::Reclaiming);
     }

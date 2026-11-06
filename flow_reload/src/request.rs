@@ -1,14 +1,15 @@
 use crate::Checkpoint;
 use crate::{HostWaker, RunStatus, Services, TaskHandle, TaskVTable};
 use interface::services::{
-    HandlerHeader, HostTaskControl, HostTaskVTable, TASK_CONTROL_ABI_VERSION,
+    AccessGenerationLocalFn, HandlerHeader, HostTaskControl, HostTaskVTable, HostTaskVTableExt,
+    MakeGenerationLocalFn, GENERATION_SERVICES_ABI_VERSION, TASK_CONTROL_ABI_VERSION,
 };
 use interface::services::{HandlerRequest, ResourceId, ServiceError, ServiceKey};
 use std::ffi::c_void;
 use std::future::Future;
 use std::pin::Pin;
 
-struct TaskControl(HostTaskControl);
+pub(crate) struct TaskControl(HostTaskControl);
 impl TaskControl {
     unsafe fn retain(raw: HostTaskControl) -> Result<Self, ServiceError> {
         if raw.data.is_null() || raw.vtable.is_null() {
@@ -25,6 +26,43 @@ impl TaskControl {
             return Err(ServiceError::FAILED);
         }
         Ok(Self(HostTaskControl { data, ..raw }))
+    }
+    fn extension(&self) -> Result<&HostTaskVTableExt, ServiceError> {
+        unsafe {
+            let header = self.0.vtable.cast::<HandlerHeader>().read();
+            if header.struct_size < std::mem::size_of::<HostTaskVTableExt>() as u32 {
+                return Err(ServiceError::UNSUPPORTED_OPERATION);
+            }
+            let pointer = self.0.vtable.cast::<HostTaskVTableExt>();
+            // An unknown extension can have a different payload, including bytes
+            // that are not valid Rust function pointers. Read its header first.
+            let extension = std::ptr::addr_of!((*pointer).extension).read();
+            if extension.abi_version != GENERATION_SERVICES_ABI_VERSION
+                || extension.struct_size < std::mem::size_of::<HostTaskVTableExt>() as u32
+            {
+                return Err(ServiceError::UNSUPPORTED_OPERATION);
+            }
+            Ok(&*pointer)
+        }
+    }
+    pub(crate) fn notification(&self) -> Result<crate::HostNotification, ServiceError> {
+        let extension = self.extension()?;
+        unsafe { crate::HostNotification::owned((extension.notification)(self.0.data)) }
+    }
+    pub(crate) fn with_local(
+        &self,
+        key: *const c_void,
+        make: MakeGenerationLocalFn,
+        init: *mut c_void,
+        access: AccessGenerationLocalFn,
+        argument: *mut c_void,
+    ) -> u32 {
+        match self.extension() {
+            Ok(table) => unsafe {
+                (table.with_local)(self.0.data, key, make, init, access, argument)
+            },
+            Err(error) => error.0,
+        }
     }
 }
 impl Drop for TaskControl {
@@ -48,6 +86,17 @@ pub struct RequestContext {
 }
 
 impl RequestContext {
+    pub(crate) fn control(&self) -> &TaskControl {
+        &self.control
+    }
+
+    /// A resident-host C notification tied to effective request completion,
+    /// including registered cleanup. Retained raw clones may outlive the DLL;
+    /// they become inert when the request has fully joined.
+    pub fn host_notification(&self) -> Result<crate::HostNotification, ServiceError> {
+        self.control.notification()
+    }
+
     /// Registers a cooperative local child. Its factory runs only on first poll,
     /// after successful registration. The request cannot complete until it joins.
     pub fn spawn_child<F: Future<Output = Result<(), ServiceError>> + 'static>(

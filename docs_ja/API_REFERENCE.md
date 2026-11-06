@@ -18,6 +18,11 @@ SDK は退役・コード参照・呼び出しの帰還・所有スレッドを�
 保持理由、`ReclaimResult`、close とコピー削除の区別は [DLL の寿命](UNLOAD_SAFETY.md) を参照してください。
 Handler ABI と累積ロード予算の意味は変わりません。
 
+`GenerationLocal<T>` は世代・所有スレッドごとの登録型TLSで、`with` / `with_mut` からアクセスします。
+`RequestContext::host_notification()` は要求終了後もCハンドルのclone・wake・dropがホストで完結する通知です。
+`call_async` は対応するホストでこの通知を自動利用します。
+任意のTLSや依存先固有の終了は対象外です。[責任範囲と使い方](MANAGED_LOCALS_AND_NOTIFICATIONS.md) を参照してください。
+
 推奨する API は資源の所有・処理の受付・世代付き実行を分離します。
 
 ### 資源とロジック

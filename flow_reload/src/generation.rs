@@ -8,6 +8,8 @@ use std::sync::Arc;
 pub(crate) struct CodeLease {
     _code: Arc<dyn Send + Sync>,
     executions: Arc<AtomicUsize>,
+    #[cfg(feature = "native")]
+    native_id: Option<crate::ArtifactId>,
 }
 impl CodeLease {
     #[cfg_attr(not(feature = "native"), allow(dead_code))]
@@ -15,7 +17,18 @@ impl CodeLease {
         Self {
             _code: code,
             executions,
+            #[cfg(feature = "native")]
+            native_id: None,
         }
+    }
+    #[cfg(feature = "native")]
+    pub(crate) fn with_native_id(mut self, id: crate::ArtifactId) -> Self {
+        self.native_id = Some(id);
+        self
+    }
+    #[cfg(feature = "native")]
+    pub(crate) fn native_id(&self) -> Option<crate::ArtifactId> {
+        self.native_id
     }
     pub(crate) fn enter(&self) -> CallGuard {
         self.executions.fetch_add(1, Ordering::AcqRel);

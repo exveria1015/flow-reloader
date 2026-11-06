@@ -14,3 +14,7 @@ separate example crates and exercise the other side of this boundary.
 `reclamation.rs` uses the same frozen ABI with the actual SDK Waker bridge and
 code-lease types included from `src/`. It constrains execution and exposes a return
 barrier so the host can verify that the last lease disappearing does not close a DLL.
+
+`managed_logic.rs` is built as a separate cdylib against the actual SDK with native
+features disabled. It exercises generated handlers, registered generation locals,
+host async notifications and destructor failure across the real allocation/FFI boundary.

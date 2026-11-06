@@ -14,6 +14,9 @@ $taskResults = @()
 $taskModels = if ($BorrowModel -eq 'Both') { @('Stacked', 'Tree') } else { @($BorrowModel) }
 $taskGroups = @(
     @{ Name = 'generation'; Args = @('--lib', 'generation::') },
+    @{ Name = 'generation-scope'; Args = @('--lib', 'generation_scope::') },
+    @{ Name = 'host-notifications'; Args = @('--lib', 'notification::') },
+    @{ Name = 'generation-locals'; Args = @('--test', 'generation_locals') },
     @{ Name = 'task'; Args = @('--lib', 'task::') },
     @{ Name = 'host-resources'; Args = @('--test', 'host_resources') },
     @{ Name = 'request-routing'; Args = @('--test', 'request_routing') },
@@ -34,6 +37,8 @@ try {
         'Cargo.toml', 'flow_reload/Cargo.toml', 'interface/Cargo.toml', 'hot_macro/Cargo.toml',
         'interface/src/lib.rs', 'hot_macro/src/lib.rs', 'flow_reload/src/lib.rs',
         'flow_reload/src/internal.rs', 'flow_reload/src/generation.rs', 'flow_reload/src/native.rs',
+        'flow_reload/src/generation_scope.rs', 'flow_reload/src/generation_local.rs',
+        'flow_reload/src/notification.rs', 'flow_reload/tests/generation_locals.rs',
         'flow_reload/src/task/future.rs', 'flow_reload/src/task/waker.rs', 'flow_reload/src/task/mod.rs',
         'flow_reload/src/resources.rs', 'flow_reload/src/request.rs', 'flow_reload/src/routing.rs',
         'interface/src/services.rs', 'hot_macro/src/handler.rs',

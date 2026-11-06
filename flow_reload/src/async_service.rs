@@ -135,6 +135,7 @@ struct CallActivity {
     state: Rc<RefCell<CallState>>,
     stopping: bool,
     cancel_sent: bool,
+    notification: Option<crate::HostNotification>,
 }
 impl CallActivity {
     fn deliver(&mut self, result: Result<Vec<u8>, ServiceError>) {
@@ -192,7 +193,10 @@ unsafe impl ManagedActivity for CallActivity {
         }
         let id = self.id.unwrap();
         let this = &mut *self;
-        match this.services.poll_async(id, cx, &mut this.output) {
+        match this
+            .services
+            .poll_async(id, cx, &mut this.output, this.notification.as_ref())
+        {
             Poll::Pending => Poll::Pending,
             Poll::Ready(result) => {
                 this.services.release_async(id);
@@ -249,6 +253,11 @@ impl RequestContext {
             return Err(ServiceError::INVALID_ARGUMENT);
         }
         let state = Rc::new(RefCell::new(CallState::default()));
+        let notification = match self.host_notification() {
+            Ok(notification) => Some(notification),
+            Err(ServiceError::UNSUPPORTED_OPERATION) => None,
+            Err(error) => return Err(error),
+        };
         self.register_activity(CallActivity {
             services: self.services().clone(),
             resource,
@@ -260,6 +269,7 @@ impl RequestContext {
             state: state.clone(),
             stopping: false,
             cancel_sent: false,
+            notification,
         })?;
         Ok(ServiceCall {
             state,

@@ -34,6 +34,12 @@ below describe unreleased work and do not announce an RC or stable release.
   and cumulative attempt-budget semantics are unchanged.
 - Examples for TCP, static logic, threaded I/O, service contracts, SQLite
   resource migration, a headless Bevy game and a Tauri GUI.
+- Registered `GenerationLocal<T>` values with owner-thread destruction and
+  cleanup-failure retention, plus resident `HostNotification` handles for host I/O.
+  Delayed host notifications detach after registered request cleanup and can
+  outlive a reclaimed DLL. Individual dependency shutdown stays application-owned.
+  An optional task-control tail adds generation-services ABI 1 without changing
+  Handler ABI 5 or the task-control ABI 2 base layout.
 
 ### Build and compatibility
 

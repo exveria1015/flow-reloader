@@ -1,11 +1,11 @@
 # Testing
 
 Run checks from the workspace root with Cargo and rustc on PATH. Native tests
-compile standalone DLL fixtures; they are independent of the proc macros.
+compile both frozen ABI fixtures independent of the proc macros and actual SDK handlers.
 
 ```sh
 cargo fmt --all -- --check
-rustfmt --edition 2021 --check flow_reload/tests/fixtures/handler.rs flow_reload/tests/fixtures/abi_v5.rs flow_reload/tests/fixtures/reclamation.rs
+rustfmt --edition 2021 --check flow_reload/tests/fixtures/handler.rs flow_reload/tests/fixtures/abi_v5.rs flow_reload/tests/fixtures/reclamation.rs flow_reload/tests/fixtures/managed_logic.rs
 cargo clippy -p interface -p hot_macro -p flow_reload --all-targets --locked -- -D warnings
 cargo clippy -p interface -p hot_macro -p flow_reload --all-targets --all-features --locked -- -D warnings
 cargo test -p interface -p hot_macro -p flow_reload --locked
@@ -31,6 +31,8 @@ cargo test -p interface -p hot_macro -p flow_reload --release --all-features --l
 | `contracts_host` / `native_contracts` (ignored) | Actual SDK DLLs with multiple services and typed init rejection before request execution |
 | `native_routing` | Actual DLLs, persistent connection, checkpoint formats, external callback return/join, failed unsubscribe and old ABI rejection |
 | `native_reclamation` | Explicit retirement/lease/call guards, escaped Waker return barrier, owner thread, rejection, 40 cutovers, OS residency and Windows copy-removal failure |
+| `generation_locals` | Generation and router isolation, borrow/panic handling and rejection of missing or unknown control extensions |
+| `native_managed_generation` | Actual SDK DLLs, registered local destruction, cancellation cleanup, unmapping with retained host notifications and retention after destructor panic |
 | Bevy `native_game` (ignored) | Real DLLs in Bevy frames, delayed worker Restart, stale generation/entity/revision results and owner thread |
 
 The standalone native ABI fixture uses its bundled, frozen `abi_v5.rs` table
@@ -47,7 +49,7 @@ python scripts/check-docs.py
 Use `-Offline` for the package check when dependencies are cached. The script
 packages the three SDK crates, extracts their archives into an isolated workspace,
 checks all targets with and without native features, builds a standalone ABI DLL,
-runs the explicit native reclamation suite and runs a static consumer.
+runs the explicit native reclamation and managed-generation suites and runs a static consumer.
 Patches resolve the unpublished SDK dependencies to
 the extracted archives, never to the source checkout. README and license texts
 must be present in each archive. Results and archive hashes remain under
@@ -125,7 +127,9 @@ cargo +nightly-2026-11-02 miri setup --target x86_64-unknown-linux-gnu
 
 The script runs both Stacked and Tree Borrows with seed 0, without disabling
 borrow checks. Use `-Seed 1` for another seed or `-BorrowModel Tree` / `Stacked`
-for one model. It covers task/Waker ownership, host resources, routing, Restart, host commit, managed activities, async/threaded services and service contracts.
+for one model. It covers task/Waker ownership, registered generation locals,
+host notification races, host resources, routing, Restart, host commit, managed
+activities, async/threaded services and service contracts.
 The threaded service TCP tests are excluded under Miri; their native execution is separate.
 SQLite and its C code are tested natively; Miri covers the generic commit lifecycle only.
 It writes source hashes, environment details, logs and exit codes under

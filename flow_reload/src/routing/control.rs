@@ -1,13 +1,17 @@
 use crate::activity::Entry;
 use crate::generation::CodeLease;
+use crate::generation_scope::GenerationScope;
+use crate::notification::WakeGate;
 use crate::{ActivityHandle, MAX_MANAGED_ACTIVITIES};
 use crate::{ServiceError, ServiceKey};
 use interface::services::{
-    HandlerHeader, HostTaskControl, HostTaskVTable, TASK_CONTROL_ABI_VERSION,
+    AccessGenerationLocalFn, HandlerHeader, HostTaskControl, HostTaskVTable, HostTaskVTableExt,
+    MakeGenerationLocalFn, GENERATION_SERVICES_ABI_VERSION, TASK_CONTROL_ABI_VERSION,
 };
 use std::cell::{Cell, RefCell};
 use std::ffi::c_void;
-use std::rc::Rc;
+use std::rc::{Rc, Weak};
+use std::sync::Arc;
 use std::task::Context;
 use std::task::Waker;
 
@@ -33,6 +37,8 @@ pub(super) struct Control {
     activities: RefCell<Vec<Entry>>,
     polling: Cell<usize>,
     lease: Option<CodeLease>,
+    scope: Weak<GenerationScope>,
+    pub(super) notification_gate: Arc<WakeGate>,
 }
 impl Control {
     pub fn new(
@@ -40,6 +46,7 @@ impl Control {
         checkpoint: Option<Checkpoint>,
         max_bytes: usize,
         lease: Option<CodeLease>,
+        scope: Weak<GenerationScope>,
     ) -> Rc<Self> {
         Rc::new(Self {
             stop: Cell::new(false),
@@ -52,6 +59,8 @@ impl Control {
             activities: RefCell::new(Vec::new()),
             polling: Cell::new(0),
             lease,
+            scope,
+            notification_gate: Arc::new(WakeGate::default()),
         })
     }
     pub fn stop(&self) {
@@ -71,6 +80,7 @@ impl Control {
         self.activities.borrow().len() + self.polling.get()
     }
     pub fn poll_activities(&self, cx: &mut Context<'_>) -> bool {
+        self.notification_gate.update(cx.waker());
         // Do not hold a RefCell borrow over foreign callbacks. Registration during
         // polling is bounded too; new entries are driven on the following poll.
         let entries = std::mem::take(&mut *self.activities.borrow_mut());
@@ -105,8 +115,30 @@ impl Control {
     pub fn raw(self: &Rc<Self>) -> HostTaskControl {
         HostTaskControl {
             data: Rc::as_ptr(self).cast_mut().cast(),
-            vtable: &VTABLE,
+            vtable: &VTABLE.base,
         }
+    }
+}
+impl Drop for Control {
+    fn drop(&mut self) {
+        self.notification_gate.revoke();
+    }
+}
+unsafe extern "C" fn notification(data: *mut c_void) -> crate::HostWaker {
+    (&*data.cast::<Control>()).notification_gate.raw()
+}
+unsafe extern "C" fn with_local(
+    data: *mut c_void,
+    key: *const c_void,
+    make: MakeGenerationLocalFn,
+    init: *mut c_void,
+    access: AccessGenerationLocalFn,
+    argument: *mut c_void,
+) -> u32 {
+    let control = &*data.cast::<Control>();
+    match control.scope.upgrade() {
+        Some(scope) => scope.with_local(key, make, init, access, argument),
+        None => ServiceError::REVOKED.0,
     }
 }
 unsafe extern "C" fn register_activity(data: *mut c_void, raw: ActivityHandle) -> u32 {
@@ -156,14 +188,22 @@ unsafe extern "C" fn checkpoint(
     *control.checkpoint.borrow_mut() = Some(Checkpoint { schema, bytes });
     0
 }
-static VTABLE: HostTaskVTable = HostTaskVTable {
-    header: HandlerHeader {
-        abi_version: TASK_CONTROL_ABI_VERSION,
-        struct_size: std::mem::size_of::<HostTaskVTable>() as u32,
+static VTABLE: HostTaskVTableExt = HostTaskVTableExt {
+    base: HostTaskVTable {
+        header: HandlerHeader {
+            abi_version: TASK_CONTROL_ABI_VERSION,
+            struct_size: std::mem::size_of::<HostTaskVTableExt>() as u32,
+        },
+        retain,
+        release,
+        stop_requested: stopped,
+        checkpoint,
+        register_activity,
     },
-    retain,
-    release,
-    stop_requested: stopped,
-    checkpoint,
-    register_activity,
+    extension: HandlerHeader {
+        abi_version: GENERATION_SERVICES_ABI_VERSION,
+        struct_size: std::mem::size_of::<HostTaskVTableExt>() as u32,
+    },
+    notification,
+    with_local,
 };

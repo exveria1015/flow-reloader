@@ -31,6 +31,10 @@ println!("attempts={}/{}", router.options().generations.used(),
 これらも OS 上の画像消滅やメモリ解放量を表しません。
 コピー失敗・ネイティブ open 失敗は累積件数を持ち、コピー削除エラーは直近32件と累積件数を返します。
 
+登録型TLSの残数は `registered_locals`、破棄失敗数は `local_cleanup_failures` で観測します。
+どちらも回収を止める理由になり、破棄失敗後は同じ破棄関数を再実行しません。
+SDKが管理する通知と登録値の範囲は [登録型TLSとホスト所有の通知](MANAGED_LOCALS_AND_NOTIFICATIONS.md) を参照してください。
+
 ## CLI でコピーを調べる
 
 リポジトリのルートで実行します。

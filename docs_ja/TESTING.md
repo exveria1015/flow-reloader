@@ -19,6 +19,8 @@
 | `contracts_host` の `native_contracts`（ignored） | 実 SDK DLL 2世代のサービス不足・版違い・初期化形式拒否、同期／非同期の複数サービス利用 |
 | `native_routing` | 実 DLL と同じ TCP 接続、チェックポイント形式変更、別スレッドのコールバック帰還・join・解除失敗、旧 ABI 拒否 |
 | `native_reclamation` | 退役・所有参照・実行帰還の検査、外部 Waker の帰還待ち、所有スレッド、拒否候補、40回更新、OS 常駐状態と Windows のコピー削除失敗 |
+| `generation_locals` | 世代・Router間の値の分離、借用とpanic、旧テーブル・未知の制御拡張の拒否 |
+| `native_managed_generation` | 実SDKのDLL、登録値の破棄、キャンセル終了待ち、ホスト通知を保持したままの回収、破棄panic時の保持 |
 | Bevy `native_game` の ignored テスト | 実 DLL と Bevy ECS、フレーム境界、遅延停止・復元、旧世代・Entity・入力版の結果検査、所有スレッド |
 | Tauri `engine` の ignored テスト | 独立プロジェクトの実 DLL ビルド、Drain／Restart、値の継続、構文エラー復帰、作業ディレクトリから独立したコピー |
 
@@ -48,7 +50,7 @@ python scripts/check-docs.py
 
 ```powershell
 cargo fmt --all -- --check
-rustfmt --edition 2021 --check flow_reload/tests/fixtures/handler.rs flow_reload/tests/fixtures/abi_v5.rs flow_reload/tests/fixtures/reclamation.rs
+rustfmt --edition 2021 --check flow_reload/tests/fixtures/handler.rs flow_reload/tests/fixtures/abi_v5.rs flow_reload/tests/fixtures/reclamation.rs flow_reload/tests/fixtures/managed_logic.rs
 cargo clippy -p interface -p hot_macro -p flow_reload --all-targets --locked -- -D warnings
 cargo clippy -p interface -p hot_macro -p flow_reload --all-targets --all-features --locked -- -D warnings
 cargo test -p interface -p hot_macro -p flow_reload --locked
@@ -118,7 +120,7 @@ cargo +nightly-2026-11-02 miri setup --target x86_64-unknown-linux-gnu
 
 スクリプトは Stacked／Tree Borrows の両方を seed 0 で実行します。
 `-Seed 1` で別 seed、`-BorrowModel Stacked` または `Tree` で単独実行できます。
-対象は task、resources、routing、restart、host commit、managed activities、async services、threaded services、service contracts です。
+対象は task、登録型TLS、ホスト通知の競合、resources、routing、restart、host commit、managed activities、async services、threaded services、service contracts です。
 Miri では threaded services の実 TCP テストを除外し、同期・通知・所有の検査だけを行います。
 SQLite と C コードはネイティブで確認し、Miri はコアの確定フックの管理だけを対象にします。
 

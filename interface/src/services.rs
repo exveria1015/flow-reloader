@@ -6,6 +6,7 @@ pub const SERVICES_ABI_VERSION: u32 = 2;
 pub const HANDLER_ABI_VERSION: u32 = 5;
 pub const TASK_CONTROL_ABI_VERSION: u32 = 2;
 pub const ACTIVITY_ABI_VERSION: u32 = 1;
+pub const GENERATION_SERVICES_ABI_VERSION: u32 = 1;
 pub const MAX_SERVICE_REQUIREMENTS: usize = 32;
 pub const MAX_INIT_BYTES: usize = 1024 * 1024;
 
@@ -69,6 +70,44 @@ pub struct HostTaskControl {
     pub data: *mut c_void,
     pub vtable: *const HostTaskVTable,
 }
+
+/// Optional tail of task-control ABI 2. The base prefix keeps its original
+/// layout; readers must check BOTH sizes and the extension version before use.
+#[repr(C)]
+pub struct HostTaskVTableExt {
+    pub base: HostTaskVTable,
+    pub extension: HandlerHeader,
+    /// Returns one owned host-resident notification handle. Its callbacks/data
+    /// must remain valid after the request and plugin have been destroyed.
+    pub notification: unsafe extern "C" fn(*mut c_void) -> crate::HostWaker,
+    /// key identifies one DLL-local static key. Factory/access arguments are
+    /// borrowed for this call only. Access cannot retain a pointer to the value.
+    pub with_local: unsafe extern "C" fn(
+        *mut c_void,
+        *const c_void,
+        MakeGenerationLocalFn,
+        *mut c_void,
+        AccessGenerationLocalFn,
+        *mut c_void,
+    ) -> u32,
+}
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct GenerationLocalValue {
+    pub data: *mut c_void,
+    /// Zero certifies successful destruction. Any error makes the state
+    /// uncertain; the host retains code and never retries this destructor.
+    /// Must be Some for a successfully created, non-null value.
+    pub destroy: Option<unsafe extern "C" fn(*mut c_void) -> u32>,
+}
+#[repr(C)]
+pub struct GenerationLocalCreated {
+    pub status: u32,
+    /// On an error, data must be null and no ownership is transferred.
+    pub value: GenerationLocalValue,
+}
+pub type MakeGenerationLocalFn = unsafe extern "C" fn(*mut c_void) -> GenerationLocalCreated;
+pub type AccessGenerationLocalFn = unsafe extern "C" fn(*mut c_void, *mut c_void) -> u32;
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]

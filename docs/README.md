@@ -11,6 +11,7 @@ the getting-started guide, then read the contracts relevant to your host.
 | [Examples](../examples/README.md) | Select a native, static, game, database or GUI sample |
 | [API reference](API_REFERENCE.md) | Resources, routing, workers, limits and build configurations |
 | [Compatibility and scope](COMPATIBILITY.md) | Toolchains, platforms, ABI and application responsibilities |
+| [Managed locals and notifications (Japanese)](../docs_ja/MANAGED_LOCALS_AND_NOTIFICATIONS.md) | Generation-local values, host notifications and dependency cleanup boundaries |
 | [Tauri GUI lab](TAURI_GUI_LAB.md) | Edit Rust in the English UI and compare Drain/Restart |
 
 ## Operate and verify

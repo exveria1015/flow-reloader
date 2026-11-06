@@ -182,6 +182,34 @@ can supply that proof. `released_native_images` and `close_failure_count` count 
 outcomes; OS module residency and RAM usage are separate observations.
 See the [full safety contract](../docs_ja/UNLOAD_SAFETY.md).
 
+## Registered generation locals and resident notifications
+
+`GenerationLocal<T>::new(fn() -> T)` defines a static key. `with(&ctx, f)` and
+`with_mut(&ctx, f)` lazily access an owner-thread value shared only within one
+router generation. References cannot escape the closure. Limits: 64 keys per
+generation; conflicting borrows or recursive initialization return BUSY. Init/access
+panics return PANICKED without rolling back mutations or side effects.
+Values are destroyed in reverse initialization order, while code is leased, when
+the last generation owner is released. Completed task handles still own a generation.
+Destructor failures retain code and are never retried; native records expose
+`registered_locals`, `local_cleanup_failures`, `RegisteredLocals` and `LocalCleanupFailed`.
+
+`RequestContext::host_notification()` returns an owner-thread `HostNotification`.
+Its `as_raw()` is a borrowed C descriptor: foreign retention requires a vtable clone
+and exactly one drop/consuming wake per owned handle. The resident host owns the
+callbacks/data. Notifications detach from the executor after the root AND all
+registered cleanup finish; delayed host wake/clone/drop do not enter or pin the DLL.
+SDK `call_async`/`call_service_async` use this path automatically on supporting hosts.
+Executor Wakers must belong to resident host code independently of reloaded generations.
+
+Handler ABI 5 and task-control ABI 2 retain their base layouts. An optional,
+size-checked task-control tail carries generation-services ABI 1. Older/unknown
+extensions return UNSUPPORTED_OPERATION for new APIs; async services on old hosts
+keep the legacy retained-Waker path. C ABI handles remain the cross-library boundary.
+Arbitrary thread_local!, DLL Wakers directly captured by external runtimes, and
+dependency-specific shutdown remain application/adapter responsibilities. Reclamation
+stays unsafe and KeepLoaded stays the default. See [scope and lifecycle](../docs_ja/MANAGED_LOCALS_AND_NOTIFICATIONS.md).
+
 ## Build configurations
 
 Defaults enable `native` (DLL loading, retention and cache cleanup) and `dev-tools`

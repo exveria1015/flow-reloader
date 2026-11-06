@@ -233,6 +233,9 @@ impl Restart<'_> {
                 .ok_or(RouteError::GenerationExhausted)?,
             api: candidate.api,
             in_flight: Cell::new(0),
+            scope: crate::generation_scope::GenerationScope::new(
+                candidate.image.as_ref().map(GenerationOwner::lease),
+            ),
             image: candidate.image,
             controls: RefCell::new(Vec::new()),
             completion: self.router.active.completion.clone(),

@@ -314,8 +314,20 @@ impl Services {
         id: AsyncOperationId,
         cx: &mut Context<'_>,
         output: &mut [u8],
+        notification: Option<&crate::HostNotification>,
     ) -> Poll<Result<usize, ServiceError>> {
-        let (waker, _guard) = crate::task::host_waker_from(cx.waker(), None);
+        let fallback = notification
+            .is_none()
+            .then(|| crate::task::host_waker_from(cx.waker(), None));
+        let waker = notification
+            .map(crate::HostNotification::as_raw)
+            .unwrap_or_else(|| {
+                let raw = &fallback.as_ref().unwrap().0;
+                HostWaker {
+                    data: raw.data,
+                    vtable: raw.vtable,
+                }
+            });
         let result = unsafe {
             ((*self.raw.vtable).poll_async)(
                 self.raw.data,

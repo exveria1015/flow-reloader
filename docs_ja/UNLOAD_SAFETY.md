@@ -10,6 +10,10 @@ Router の Drop、ルート要求の完了、Waker の破棄から物理アン�
 
 ロード直後からホストの保持一覧に所有参照を保存するため、検査失敗や後続の unwind でもコードは残ります。
 `RequestTask`、登録処理、外部へ渡した Waker も実行世代への参照を保持します。
+SDKのホストI/Oには、要求終了後に無効化できるホスト所有の通知口を使います。
+この通知の外部クローンはDLLを保持せず、終了後のwake・dropもホスト側で完結します。
+`GenerationLocal<T>` に登録したTLSは世代の所有終了時に破棄します。
+対象範囲と依存先の責任は [登録型TLSと通知](MANAGED_LOCALS_AND_NOTIFICATIONS.md) を参照してください。
 一方、静的リンクではコードが実行ファイルに含まれ、DLL のコピーは作りません。
 
 ## ホストから明示的に回収する
@@ -49,6 +53,8 @@ SDK は回収の安全性を自動判定する DLL 用終了フックや、世�
 | `ExternalQuiescenceUnconfirmed` | 外部 Waker の帰還、TLS、依存先等をホストが確認し、明示回収の契約を満たす |
 | `Reclaiming` | close とその終了処理が戻るまで再回収しない |
 | `CloseUncertain` | close が失敗した画像とコピーを保持し、消費したハンドルを再利用しない |
+| `RegisteredLocals { count }` | 登録した世代ローカル値の所有が終了し、破棄が戻るまで待つ。不確定な残留も数える |
+| `LocalCleanupFailed { count }` | 登録値の破棄に失敗した画像を保持する。同じ破棄関数は再実行しない |
 
 回収APIは SDK 側の条件が不足すると `ReclaimResult::Retained { reasons }` を返します。
 成功時は `Released { copy_removal_error }` で、ローダー参照の解放後にコピーを削除します。

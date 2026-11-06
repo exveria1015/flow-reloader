@@ -25,6 +25,7 @@
 - [ホスト資源・DB の移行](HOST_RESOURCE_MIGRATION.md): 最終確定フック、SQLite とキャッシュの排他、失敗の遮断と復旧。
 - [子タスク・外部コールバック](MANAGED_ACTIVITIES.md): 明示登録、停止・join、Drop 後の終了待ちと失敗。
 - [非同期サービス・複数スレッド](ASYNC_SERVICES_AND_THREADS.md): 実 I/O、待機・キャンセル、有界 FIFO、所有と通知。
+- [登録型TLSとホスト所有の通知](MANAGED_LOCALS_AND_NOTIFICATIONS.md): 世代ローカル値の破棄、遅延通知、依存先との責任分界。
 - [複数サービス・型付き初期化](SERVICE_CONTRACTS_AND_INIT.md): 必要サービスの照合、世代ごとの設定、形式不一致の拒否。
 - [開発時の運用](DEVELOPMENT.md): ビルド、復旧、DLL コピーの扱い。
 - [保持量の観測と掃除](RETENTION_AND_CLEANUP.md): DLL 参照の観測、セッション管理、終了後のコピー掃除。
