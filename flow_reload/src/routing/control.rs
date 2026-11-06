@@ -115,7 +115,9 @@ impl Control {
     pub fn raw(self: &Rc<Self>) -> HostTaskControl {
         HostTaskControl {
             data: Rc::as_ptr(self).cast_mut().cast(),
-            vtable: &VTABLE.base,
+            // Preserve provenance for the optional tail. A reference to only
+            // base would grant read access to that prefix, not the extension.
+            vtable: std::ptr::addr_of!(VTABLE).cast::<HostTaskVTable>(),
         }
     }
 }
