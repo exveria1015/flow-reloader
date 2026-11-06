@@ -18,6 +18,7 @@
 | `service_contracts` | 複数要求・明示割り当て、初期化スキーマ・形式・panic拒否、失効の再検査、世代間の設定保持 |
 | `contracts_host` の `native_contracts`（ignored） | 実 SDK DLL 2世代のサービス不足・版違い・初期化形式拒否、同期／非同期の複数サービス利用 |
 | `native_routing` | 実 DLL と同じ TCP 接続、チェックポイント形式変更、別スレッドのコールバック帰還・join・解除失敗、旧 ABI 拒否 |
+| `native_reclamation` | 退役・所有参照・実行帰還の検査、外部 Waker の帰還待ち、所有スレッド、拒否候補、40回更新、OS 常駐状態と Windows のコピー削除失敗 |
 | Bevy `native_game` の ignored テスト | 実 DLL と Bevy ECS、フレーム境界、遅延停止・復元、旧世代・Entity・入力版の結果検査、所有スレッド |
 | Tauri `engine` の ignored テスト | 独立プロジェクトの実 DLL ビルド、Drain／Restart、値の継続、構文エラー復帰、作業ディレクトリから独立したコピー |
 
@@ -33,7 +34,7 @@ python scripts/check-docs.py
 
 依存を取得済みなら、配布物の検査に `-Offline` を指定できます。
 スクリプトは SDK の3 crate をパッケージ化し、展開したアーカイブだけで別ワークスペースを作ります。
-全ターゲットのネイティブ・静的構成、独立した ABI DLL、静的リンクの利用側プログラムを検査します。
+全ターゲットのネイティブ・静的構成、独立した ABI DLL、明示回収の実 DLL 試験、静的リンクの利用側プログラムを検査します。
 未公開の内部依存は patch で展開済み crate に解決し、元のソースツリーは参照しません。
 各アーカイブに README とライセンス本文が必要です。結果とアーカイブのハッシュは
 `target/package-checks/` に残します。レジストリへの公開や crate 名の予約は行いません。
@@ -47,7 +48,7 @@ python scripts/check-docs.py
 
 ```powershell
 cargo fmt --all -- --check
-rustfmt --check flow_reload/tests/fixtures/handler.rs flow_reload/tests/fixtures/abi_v5.rs
+rustfmt --edition 2021 --check flow_reload/tests/fixtures/handler.rs flow_reload/tests/fixtures/abi_v5.rs flow_reload/tests/fixtures/reclamation.rs
 cargo clippy -p interface -p hot_macro -p flow_reload --all-targets --locked -- -D warnings
 cargo clippy -p interface -p hot_macro -p flow_reload --all-targets --all-features --locked -- -D warnings
 cargo test -p interface -p hot_macro -p flow_reload --locked

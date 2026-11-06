@@ -1,8 +1,8 @@
 use super::waker::host_waker_from;
+use crate::generation::{enter, CodeLease};
 use crate::{HostWaker, RunStatus, TaskHandle};
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::Arc;
 use std::task::{Context, Poll};
 
 /// Owns one FFI future. Only this type calls its foreign destructor.
@@ -37,7 +37,7 @@ pub struct FfiFuture {
     future: Option<OwnedTask>,
     completed: Option<RunStatus>,
     // Foreign future is destroyed before the code lease, even on cancellation.
-    keep_alive: Option<Arc<dyn Send + Sync>>,
+    keep_alive: Option<CodeLease>,
 }
 
 impl FfiFuture {
@@ -57,11 +57,18 @@ impl FfiFuture {
 
     pub(crate) unsafe fn with_optional_keep_alive(
         future: TaskHandle,
-        lease: Option<Arc<dyn Send + Sync>>,
+        lease: Option<CodeLease>,
     ) -> Option<Self> {
         let mut task = Self::new(future)?;
         task.keep_alive = lease;
         Some(task)
+    }
+}
+
+impl Drop for FfiFuture {
+    fn drop(&mut self) {
+        let _call = enter(&self.keep_alive);
+        self.future = None;
     }
 }
 
@@ -72,6 +79,7 @@ impl Future for FfiFuture {
         if let Some(status) = self.completed {
             return Poll::Ready(status);
         }
+        let _call = enter(&self.keep_alive);
         let (host_waker, _guard) = host_waker_from(cx.waker(), self.keep_alive.clone());
         let status = self
             .future
@@ -165,5 +173,53 @@ mod tests {
             })
         }
         .is_none());
+    }
+
+    #[test]
+    fn host_guards_cover_poll_and_foreign_drop_for_completion_and_cancellation() {
+        use std::sync::{
+            atomic::{AtomicUsize, Ordering},
+            Arc,
+        };
+        struct Observed {
+            calls: Arc<AtomicUsize>,
+            drops: Arc<AtomicUsize>,
+            status: RunStatus,
+        }
+        unsafe extern "C" fn poll(data: *mut c_void, _: *const HostWaker) -> RunStatus {
+            let observed = &*data.cast::<Observed>();
+            assert!(observed.calls.load(Ordering::Acquire) > 0);
+            observed.status
+        }
+        unsafe extern "C" fn destroy(data: *mut c_void) {
+            let observed = Box::from_raw(data.cast::<Observed>());
+            assert!(observed.calls.load(Ordering::Acquire) > 0);
+            observed.drops.fetch_add(1, Ordering::AcqRel);
+        }
+        static VTABLE: TaskVTable = TaskVTable {
+            poll,
+            drop: destroy,
+        };
+        for status in [RunStatus::Done, RunStatus::Error, RunStatus::Pending] {
+            let calls = Arc::new(AtomicUsize::new(0));
+            let drops = Arc::new(AtomicUsize::new(0));
+            let raw = TaskHandle {
+                data: Box::into_raw(Box::new(Observed {
+                    calls: calls.clone(),
+                    drops: drops.clone(),
+                    status,
+                }))
+                .cast(),
+                vtable: &VTABLE,
+            };
+            let lease = CodeLease::new(Arc::new(()), calls.clone());
+            let mut task =
+                unsafe { FfiFuture::with_optional_keep_alive(raw, Some(lease)) }.unwrap();
+            let _ = Pin::new(&mut task).poll(&mut Context::from_waker(std::task::Waker::noop()));
+            assert_eq!(calls.load(Ordering::Acquire), 0);
+            drop(task);
+            assert_eq!(calls.load(Ordering::Acquire), 0);
+            assert_eq!(drops.load(Ordering::Acquire), 1);
+        }
     }
 }

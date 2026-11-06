@@ -31,13 +31,13 @@ pub use interface::services::{
 };
 pub use interface::{HostWaker, HostWakerVTable, RunStatus, TaskHandle, TaskVTable};
 #[cfg(feature = "native")]
-pub use native::LoadError;
+pub use native::{reclaim_native_image, LoadError, ReclaimResult};
 pub use request::RequestContext;
 pub use resources::{HostResource, HostResources, Resource, Services};
 #[cfg(feature = "native")]
 pub use retention::{
     retention_snapshot, ArtifactId, CopyRemovalError, ImageOutcome, ImageRecord, ImageState,
-    RetentionSnapshot,
+    RetentionReason, RetentionSnapshot,
 };
 pub use routing::{
     poll_cancelled_requests, Checkpoint, GenerationBudget, PreparedHandler, RequestRouter,

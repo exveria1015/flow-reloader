@@ -1,7 +1,8 @@
 # 保持量の観測とコピーの掃除
 
 ホスト内の DLL 参照の観測、プロセス寿命のセッション管理、明示的なコピー掃除を提供します。
-ネイティブ画像はプロセス終了まで保持し、ロード予算と Handler ABI 5 の契約を維持します。
+ネイティブ画像は既定ではプロセス終了まで保持し、ロード予算と Handler ABI 5 の契約を維持します。
+終了条件を確認できるホスト向けの明示回収は [DLL の寿命](UNLOAD_SAFETY.md) を参照してください。
 
 ## ホストで観測する
 
@@ -10,8 +11,8 @@ let snapshot = flow_reload::retention_snapshot();
 println!("native_images={} recorded_copy_bytes={}",
     snapshot.tracked_native_images, snapshot.recorded_copy_bytes);
 for image in snapshot.images {
-    println!("{:?} {:?} {:?}: {}", image.id, image.state,
-        image.outcome, image.copy.display());
+    println!("{:?} {:?} {:?}: {} {:?}", image.id, image.state,
+        image.outcome, image.copy.display(), image.retention_reasons);
 }
 println!("attempts={}/{}", router.options().generations.used(),
     router.options().generations.limit());
@@ -25,6 +26,9 @@ println!("attempts={}/{}", router.options().generations.used(),
 `recorded_copy_bytes` は保持する画像のコピー作成時のファイル長の合計です。
 実メモリ使用量、OS のモジュール数、現在のディスク使用量とは別です。
 `GenerationBudget::used()` も累積試行数であり、掃除や画像解放で減りません。
+`released_native_images` は SDK のローダー参照の解放成功数です。`close_failure_count` は close の失敗数で、
+失敗した画像は `close_error` を持つ不確定な保持として件数・コピー長に含めます。
+これらも OS 上の画像消滅やメモリ解放量を表しません。
 コピー失敗・ネイティブ open 失敗は累積件数を持ち、コピー削除エラーは直近32件と累積件数を返します。
 
 ## CLI でコピーを調べる

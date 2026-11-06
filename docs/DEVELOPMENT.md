@@ -51,7 +51,8 @@ directory at `flow-reloader/managed-v1/sessions/<SessionId>/copies/`; code and f
 can accumulate. Use `retention_snapshot()` for SDK-native references and
 `flow-cache inspect` for files; `flow-cache clean --apply` removes eligible exited
 sessions. Legacy PID directories are listed only. See [cache operations](../docs_ja/RETENTION_AND_CLEANUP.md).
-Native images remain loaded until process termination;
+Images remain loaded by default. Constrained hosts can opt into explicit unsafe
+reclamation after proving external/TLS/dependency quiescence; the cumulative attempt budget is unchanged.
 see [DLL lifetime](../docs_ja/UNLOAD_SAFETY.md).
 
 The opt-in `development` module provides build/path helpers,

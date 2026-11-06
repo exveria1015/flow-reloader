@@ -10,3 +10,7 @@ ABI 1. Update it deliberately when adopting an ABI change, alongside rejection
 tests for older layouts. It is not regenerated from production sources during
 tests. Tests using the real SDK and generated handlers live in the repository's
 separate example crates and exercise the other side of this boundary.
+
+`reclamation.rs` uses the same frozen ABI with the actual SDK Waker bridge and
+code-lease types included from `src/`. It constrains execution and exposes a return
+barrier so the host can verify that the last lease disappearing does not close a DLL.

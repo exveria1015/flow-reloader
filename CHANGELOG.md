@@ -14,9 +14,9 @@ below describe unreleased work and do not announce an RC or stable release.
   saved state and initial configuration.
 - Low-level owned tasks use `TaskHandle`, `TaskVTable` and `FfiFuture`.
   Native loading errors use `LoadError`; routing errors use `RouteError`.
-- Native images remain loaded until process exit. The unload-policy API has
-  been removed; retained images and exited-session files have separate
-  inspection and cleanup APIs.
+- Native images default to KeepLoaded. The old unload-policy API has been removed;
+  explicit `unsafe reclaim_native_image` requires host proof of external/TLS/dependency
+  quiescence. Retained images and exited-session files have separate cleanup APIs.
 - Cargo/build/watch helpers are in the feature-gated `development` module.
 
 ### Capabilities
@@ -29,6 +29,9 @@ below describe unreleased work and do not announce an RC or stable release.
   typed per-generation initialization data.
 - Native retention diagnostics, managed cache sessions and the `flow-cache`
   inspection / exited-session cleanup CLI.
+- Explicit owner-thread DLL reclamation, host call-return guards, retention reasons,
+  retired-generation release and separate close/copy-removal outcomes. Handler ABI 5
+  and cumulative attempt-budget semantics are unchanged.
 - Examples for TCP, static logic, threaded I/O, service contracts, SQLite
   resource migration, a headless Bevy game and a Tauri GUI.
 

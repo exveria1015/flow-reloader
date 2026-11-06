@@ -130,12 +130,16 @@ fn main() {
         '--', 'version_four_header_is_rejected_without_reading_extended_manifest', '--exact'
     ))
     Invoke-CheckedCargo (@(
+        'test', '--manifest-path', $taskManifest, '-p', 'flow_reload', '--test', 'native_reclamation',
+        '--locked'
+    ) + $taskResolution + @('--', '--test-threads=1'))
+    Invoke-CheckedCargo (@(
         'run', '--manifest-path', $taskManifest, '-p', 'package_consumer', '--locked'
     ) + $taskResolution)
     @{
         archives = $taskArchives
         extracted_workspace = $taskStage
-        checks = @('all-targets/all-features', 'all-targets/no-default-features', 'standalone ABI DLL', 'static consumer')
+        checks = @('all-targets/all-features', 'all-targets/no-default-features', 'standalone ABI DLL', 'explicit native reclamation', 'static consumer')
     } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $taskStage 'result.json') -Encoding utf8
     Write-Host "Verified extracted SDK packages and consumer: $taskStage"
 } finally {

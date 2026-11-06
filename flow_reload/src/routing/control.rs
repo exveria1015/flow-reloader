@@ -1,4 +1,5 @@
 use crate::activity::Entry;
+use crate::generation::CodeLease;
 use crate::{ActivityHandle, MAX_MANAGED_ACTIVITIES};
 use crate::{ServiceError, ServiceKey};
 use interface::services::{
@@ -7,7 +8,6 @@ use interface::services::{
 use std::cell::{Cell, RefCell};
 use std::ffi::c_void;
 use std::rc::Rc;
-use std::sync::Arc;
 use std::task::Context;
 use std::task::Waker;
 
@@ -32,14 +32,14 @@ pub(super) struct Control {
     pub failure: Cell<Option<ServiceError>>,
     activities: RefCell<Vec<Entry>>,
     polling: Cell<usize>,
-    lease: Option<Arc<dyn Send + Sync>>,
+    lease: Option<CodeLease>,
 }
 impl Control {
     pub fn new(
         schema: ServiceKey,
         checkpoint: Option<Checkpoint>,
         max_bytes: usize,
-        lease: Option<Arc<dyn Send + Sync>>,
+        lease: Option<CodeLease>,
     ) -> Rc<Self> {
         Rc::new(Self {
             stop: Cell::new(false),

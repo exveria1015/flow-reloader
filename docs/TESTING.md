@@ -5,7 +5,7 @@ compile standalone DLL fixtures; they are independent of the proc macros.
 
 ```sh
 cargo fmt --all -- --check
-rustfmt --check flow_reload/tests/fixtures/handler.rs flow_reload/tests/fixtures/abi_v5.rs
+rustfmt --edition 2021 --check flow_reload/tests/fixtures/handler.rs flow_reload/tests/fixtures/abi_v5.rs flow_reload/tests/fixtures/reclamation.rs
 cargo clippy -p interface -p hot_macro -p flow_reload --all-targets --locked -- -D warnings
 cargo clippy -p interface -p hot_macro -p flow_reload --all-targets --all-features --locked -- -D warnings
 cargo test -p interface -p hot_macro -p flow_reload --locked
@@ -30,6 +30,7 @@ cargo test -p interface -p hot_macro -p flow_reload --release --all-features --l
 | `service_contracts` | Required service bindings, typed init validation/panic, revocation checks and generation environments |
 | `contracts_host` / `native_contracts` (ignored) | Actual SDK DLLs with multiple services and typed init rejection before request execution |
 | `native_routing` | Actual DLLs, persistent connection, checkpoint formats, external callback return/join, failed unsubscribe and old ABI rejection |
+| `native_reclamation` | Explicit retirement/lease/call guards, escaped Waker return barrier, owner thread, rejection, 40 cutovers, OS residency and Windows copy-removal failure |
 | Bevy `native_game` (ignored) | Real DLLs in Bevy frames, delayed worker Restart, stale generation/entity/revision results and owner thread |
 
 The standalone native ABI fixture uses its bundled, frozen `abi_v5.rs` table
@@ -45,8 +46,9 @@ python scripts/check-docs.py
 
 Use `-Offline` for the package check when dependencies are cached. The script
 packages the three SDK crates, extracts their archives into an isolated workspace,
-checks all targets with and without native features, builds a standalone ABI DLL
-and runs a static consumer. Patches resolve the unpublished SDK dependencies to
+checks all targets with and without native features, builds a standalone ABI DLL,
+runs the explicit native reclamation suite and runs a static consumer.
+Patches resolve the unpublished SDK dependencies to
 the extracted archives, never to the source checkout. README and license texts
 must be present in each archive. Results and archive hashes remain under
 `target/package-checks/`. This does not publish packages or reserve crate names.

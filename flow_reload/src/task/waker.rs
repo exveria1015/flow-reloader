@@ -1,8 +1,8 @@
+use crate::generation::CodeLease;
 use crate::{HostWaker, HostWakerVTable};
 use std::ffi::c_void;
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::Arc;
 use std::task::Waker;
 use std::task::{Context, Poll};
 
@@ -82,7 +82,7 @@ pub(crate) unsafe fn waker_from_host(host: &HostWaker) -> Waker {
 struct HostWakerState {
     waker: Waker,
     // Must outlive the Waker's own destructor and every clone sent to a plugin.
-    keep_alive: Option<Arc<dyn Send + Sync>>,
+    keep_alive: Option<CodeLease>,
 }
 
 unsafe extern "C" fn host_waker_clone(data: *mut c_void) -> *mut c_void {
@@ -139,7 +139,7 @@ impl Drop for HostWakerGuard {
 
 pub(crate) fn host_waker_from(
     waker: &Waker,
-    keep_alive: Option<Arc<dyn Send + Sync>>,
+    keep_alive: Option<CodeLease>,
 ) -> (HostWaker, HostWakerGuard) {
     let state = HostWakerState {
         waker: waker.clone(),
@@ -211,7 +211,9 @@ mod tests {
         let mut retained = None;
         {
             let waker = Waker::from(probe.clone());
-            let (host, _host_guard) = host_waker_from(&waker, Some(lease.clone()));
+            let code =
+                crate::generation::CodeLease::new(lease.clone(), Arc::new(AtomicUsize::new(0)));
+            let (host, _host_guard) = host_waker_from(&waker, Some(code));
             let mut future = Box::pin(std::future::poll_fn(|cx| {
                 let owned = cx.waker().clone();
                 owned.wake_by_ref();

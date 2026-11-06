@@ -44,7 +44,8 @@ Router を作り直す場合も同じ `GenerationBudget` を共有すると、�
 既定の KeepLoaded では DLL とコピーが蓄積します。新しいコピー先はユーザー一時領域の
 `flow-reloader/managed-v1/sessions/<SessionId>/copies/` です。
 `retention_snapshot()` と `flow-cache inspect` で観測し、終了後の新形式コピーは `flow-cache clean --apply` で掃除できます。
-ネイティブ画像はプロセス終了まで保持し、アンロード API は公開しません。
+外部処理と TLS の終了条件を確認できるホストは、低水準の明示回収 API を利用できます。
+既定の保持と累積ロード予算は維持します。
 [DLL の寿命と管理外タスク](UNLOAD_SAFETY.md) を参照してください。
 
 API・上限・ルート設定と掃除の条件は [保持量の観測とコピーの掃除](RETENTION_AND_CLEANUP.md) を参照してください。

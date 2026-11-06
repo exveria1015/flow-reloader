@@ -55,9 +55,11 @@ See the [API reference](API_REFERENCE.md) and [breaking changes](../CHANGELOG.md
 - Bound development sessions. Loaded images use KeepLoaded; failed load attempts
   also consume the shared cumulative budget. Restart the process when exhausted,
   and explicitly clean eligible exited-session files as needed.
+- Explicit `unsafe reclaim_native_image` requires host proof of external return,
+  Waker tails, TLS and dependency quiescence. See [DLL lifetime](../docs_ja/UNLOAD_SAFETY.md).
 
 Production rollout, crash isolation, arbitrary Future stack migration,
-automatic rollback of external effects, forced termination and live DLL
+automatic rollback of external effects, forced termination and automatic DLL
 unloading are outside the current scope. See [development operation](DEVELOPMENT.md)
 for recovery and [retention and cleanup](../docs_ja/RETENTION_AND_CLEANUP.md)
 for cache operations.

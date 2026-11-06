@@ -13,7 +13,9 @@ native reload and static linking. Default features enable `native` loading and
 Native loading is unsafe and assumes trusted SDK-compatible code. Keep host and
 logic on the same SDK version. Tasks and resource registries remain on their
 owner thread; external work must be explicitly registered and joined. Loaded
-native images remain resident until process exit.
+native images remain resident until process exit by default. The low-level
+`unsafe reclaim_native_image` operation requires caller proof of external execution,
+Waker return, TLS and dependency quiescence; it does not refund the load-attempt budget.
 
 The SDK is pre-release. Production rollout, crash isolation, forced termination,
 arbitrary Future stack migration and automatic rollback of external effects are

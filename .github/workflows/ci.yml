@@ -133,7 +133,7 @@ jobs:
       - name: Formatting
         run: |
           cargo fmt --all -- --check
-          rustfmt --check flow_reload/tests/fixtures/handler.rs flow_reload/tests/fixtures/abi_v5.rs
+          rustfmt --edition 2021 --check flow_reload/tests/fixtures/handler.rs flow_reload/tests/fixtures/abi_v5.rs flow_reload/tests/fixtures/reclamation.rs
       - uses: actions/setup-python@v5
         with:
           python-version: '3.x'
@@ -154,6 +154,8 @@ jobs:
         run: cargo test -p interface -p hot_macro -p flow_reload --locked
       - name: Cache retention and separate host/cleaner processes
         run: cargo test -p flow_reload --test cache_lifecycle --locked -- --test-threads=1
+      - name: Explicit DLL reclamation and escaped Waker return barriers
+        run: cargo test -p flow_reload --test native_reclamation --locked -- --test-threads=1
       - name: Workspace tests without the GUI application
         run: cargo test --workspace --exclude tauri_tokio --all-features --locked
       - name: Native asynchronous I/O and multiple owner threads

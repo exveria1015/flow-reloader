@@ -153,6 +153,35 @@ refunded, including missing files, failed validation and abandoned candidates.
 Share budget clones across router recreation to retain the count. `used()` and
 `limit()` expose it; this is not a process-wide memory cap.
 
+## Explicit native reclamation
+
+KeepLoaded is the default. `unsafe reclaim_native_image(ArtifactId)` is a low-level
+host operation for constrained images whose external execution, TLS, OS registrations
+and dependency finalizers the caller can certify as safe to unload. Handler ABI 5 is
+unchanged; no plugin shutdown hook or dedicated generation thread is generated.
+
+Obtain value-only IDs from `RequestRouter::artifact_id()` or `PreparedHandler::artifact_id()`.
+After cutover, finish/drop old tasks and candidates, drive registered cancellation cleanup,
+and call `release_retired_generations()` to release the router's completed old generations.
+Activity failures must be acknowledged before releasing latched generations.
+Join external execution and establish the TLS/dependency contract before calling reclaim
+on the loading thread. Escaped Waker wake/drop/clone code must have returned completely:
+the last host lease disappearing, a delay or another poll is insufficient.
+
+The SDK rechecks retirement, code leases, returned host-initiated calls and owner thread,
+then closes outside its locks. Rejected/unvalidated candidates remain retained.
+`ReclaimResult::Retained { reasons }` reports blockers; `Released { copy_removal_error }`
+separates native-reference release from copy deletion. `CloseFailed` preserves an
+uncertain diagnostic/copy and never retries the consumed handle. Unknown/released IDs
+return `NotFound`. Drop never closes images and successful reclaim never refunds the
+cumulative `GenerationBudget`.
+
+Image records report `code_leases`, `active_calls`, `retention_reasons` and `close_error`.
+`ExternalQuiescenceUnconfirmed` always appears in snapshots because only the caller
+can supply that proof. `released_native_images` and `close_failure_count` count SDK
+outcomes; OS module residency and RAM usage are separate observations.
+See the [full safety contract](../docs_ja/UNLOAD_SAFETY.md).
+
 ## Build configurations
 
 Defaults enable `native` (DLL loading, retention and cache cleanup) and `dev-tools`

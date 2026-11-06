@@ -1,3 +1,4 @@
+use crate::generation::{enter, CodeLease};
 use crate::{
     ActivityHandle, ActivityVTable, HandlerHeader, HostWaker, RunStatus, ServiceError,
     ACTIVITY_ABI_VERSION,
@@ -7,7 +8,6 @@ use std::ffi::c_void;
 use std::future::Future;
 use std::pin::Pin;
 use std::rc::Rc;
-use std::sync::Arc;
 use std::task::{Context, Poll, Waker};
 
 pub const MAX_MANAGED_ACTIVITIES: usize = 64;
@@ -160,13 +160,10 @@ pub(crate) struct Entry {
     raw: ActivityHandle,
     stopped: bool,
     joined: bool,
-    lease: Option<Arc<dyn Send + Sync>>,
+    lease: Option<CodeLease>,
 }
 impl Entry {
-    pub unsafe fn new(
-        raw: ActivityHandle,
-        lease: Option<Arc<dyn Send + Sync>>,
-    ) -> Result<Self, ServiceError> {
+    pub unsafe fn new(raw: ActivityHandle, lease: Option<CodeLease>) -> Result<Self, ServiceError> {
         if raw.data.is_null() || raw.vtable.is_null() {
             return Err(ServiceError::INVALID_ARGUMENT);
         }
@@ -184,6 +181,7 @@ impl Entry {
         })
     }
     pub fn poll(&mut self, stopping: bool, cx: &mut Context<'_>) -> (bool, Option<ServiceError>) {
+        let _call = enter(&self.lease);
         let mut error = None;
         if stopping && !self.stopped {
             let result = unsafe { ((*self.raw.vtable).request_stop)(self.raw.data) };
@@ -205,6 +203,7 @@ impl Entry {
 impl Drop for Entry {
     fn drop(&mut self) {
         if self.joined {
+            let _call = enter(&self.lease);
             unsafe { ((*self.raw.vtable).destroy)(self.raw.data) };
         } else {
             // Abandonment/thread exit cannot asynchronously join. Keep the raw owner

@@ -13,6 +13,7 @@ $taskOldMiriFlags = [Environment]::GetEnvironmentVariable('MIRIFLAGS')
 $taskResults = @()
 $taskModels = if ($BorrowModel -eq 'Both') { @('Stacked', 'Tree') } else { @($BorrowModel) }
 $taskGroups = @(
+    @{ Name = 'generation'; Args = @('--lib', 'generation::') },
     @{ Name = 'task'; Args = @('--lib', 'task::') },
     @{ Name = 'host-resources'; Args = @('--test', 'host_resources') },
     @{ Name = 'request-routing'; Args = @('--test', 'request_routing') },

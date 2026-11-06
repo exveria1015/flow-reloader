@@ -186,6 +186,12 @@ pub struct PreparedHandler {
 }
 
 impl PreparedHandler {
+    /// Native artifact identity without extending its lifetime. Static APIs have none.
+    #[cfg(feature = "native")]
+    pub fn artifact_id(&self) -> Option<crate::ArtifactId> {
+        self.image.as_ref().map(|image| image.id)
+    }
+
     pub fn based_on(&self) -> u64 {
         self.base
     }
@@ -293,7 +299,10 @@ impl RequestRouter {
         environment: HandlerEnvironment,
     ) -> Result<Self, RouteError> {
         validate(api)?;
-        let bindings = crate::environment::negotiate(&api, &environment, &resources)?;
+        let bindings = {
+            let _call = image.as_ref().map(GenerationOwner::enter);
+            crate::environment::negotiate(&api, &environment, &resources)?
+        };
         let id = NEXT_ROUTER
             .try_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
             .map_err(|_| RouteError::GenerationExhausted)?;
@@ -373,7 +382,10 @@ impl RequestRouter {
     ) -> Result<PreparedHandler, RouteError> {
         validate(api)?;
         self.check_service(api.service)?;
-        let bindings = crate::environment::negotiate(&api, &environment, &self.resources)?;
+        let bindings = {
+            let _call = image.as_ref().map(GenerationOwner::enter);
+            crate::environment::negotiate(&api, &environment, &self.resources)?
+        };
         if let Some(image) = &image {
             image.prepared();
         }
@@ -518,7 +530,10 @@ impl RequestRouter {
         };
         // The validated native contract requires copying input and retaining
         // services synchronously. Neither stack descriptor escapes this call.
-        let raw = unsafe { (generation.api.make_request)(&request) };
+        let raw = {
+            let _call = generation.image.as_ref().map(GenerationOwner::enter);
+            unsafe { (generation.api.make_request)(&request) }
+        };
         let lease = generation.image.as_ref().map(GenerationOwner::lease);
         let task = unsafe { FfiFuture::with_optional_keep_alive(raw, lease) }
             .ok_or(RouteError::InvalidTask)?;
@@ -556,6 +571,22 @@ impl RequestRouter {
     }
     pub fn generation(&self) -> u64 {
         self.active.id
+    }
+    /// Native artifact identity without extending its lifetime. Static APIs have none.
+    #[cfg(feature = "native")]
+    pub fn artifact_id(&self) -> Option<crate::ArtifactId> {
+        self.active.image.as_ref().map(|image| image.id)
+    }
+
+    /// Releases this router's ownership of completed, retired generations.
+    /// Tasks, Wakers and registered cleanup may still retain their own leases.
+    /// Activity failures must first be acknowledged; no library is closed here.
+    pub fn release_retired_generations(&mut self) -> usize {
+        let before = self.retired.len();
+        self.retired.retain(|generation| {
+            generation.in_flight.get() != 0 || generation.activity_failed.get()
+        });
+        before - self.retired.len()
     }
     pub fn service(&self) -> ServiceKey {
         self.active.api.service

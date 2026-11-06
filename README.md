@@ -65,9 +65,11 @@ CLI are not required.
   database commit and router installation are not one crash-atomic operation.
 - The message path uses **Handler ABI 5**, Services ABI 2 and task-control ABI 2.
   Rebuild host and logic together after ABI changes.
-- Native images use **KeepLoaded**, including abandoned or invalid loaded
+- Native images default to **KeepLoaded**, including abandoned or invalid loaded
   candidates. Code and temporary copies can accumulate. This preserves code lifetime,
   not borrowed data lifetime or task termination.
+  Constrained hosts can explicitly use `unsafe reclaim_native_image` after proving
+  external execution, Waker return and TLS/dependency quiescence; see [DLL lifetime](docs_ja/UNLOAD_SAFETY.md).
 - `RouterOptions` defaults to 32 cumulative load attempts per shared
   `GenerationBudget` and 1 MiB per worker checkpoint. Failed native loads consume
   budget too; completion does not refund it. Restart the development process when exhausted.

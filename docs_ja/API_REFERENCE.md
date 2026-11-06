@@ -10,6 +10,14 @@ Handler ABI 5、Services ABI 2、タスク制御 ABI 2 を使います。
 clean は `apply=true` の場合だけ適格な終了済みセッションを削除します。CLI は `flow-cache` です。
 [管理単位・排他・限界](RETENTION_AND_CLEANUP.md) を参照してください。
 
+既定の KeepLoaded に加え、終了条件を確認できるホストは `unsafe reclaim_native_image(ArtifactId)` で
+退役画像を明示回収できます。`artifact_id()` は Router／候補の画像 ID を返し、
+`release_retired_generations()` は Router が持つ完了済み旧世代の参照を解放します。
+SDK は退役・コード参照・呼び出しの帰還・所有スレッドを再検査します。
+外部 Waker の DLL 側処理全体の帰還、TLS、依存先の終了条件は呼び出し元の `unsafe` 契約です。
+保持理由、`ReclaimResult`、close とコピー削除の区別は [DLL の寿命](UNLOAD_SAFETY.md) を参照してください。
+Handler ABI と累積ロード予算の意味は変わりません。
+
 推奨する API は資源の所有・処理の受付・世代付き実行を分離します。
 
 ### 資源とロジック
